@@ -1,0 +1,7 @@
+{
+  "name": "CEWS colour-blind friendly",
+  "dataColors": ["#0072B2", "#E69F00", "#009E73", "#56B4E9", "#CC79A7", "#F0E442", "#D55E00", "#000000"],
+  "background": "#FFFFFF",
+  "foreground": "#1F2937",
+  "tableAccent": "#0072B2"
+}

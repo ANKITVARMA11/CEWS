@@ -1,0 +1,8 @@
+{
+  "totalStudies": 600000,
+  "averageSizeBytes": 17000,
+  "percentiles": {
+    "50%": 9800,
+    "90%": 28000
+  }
+}

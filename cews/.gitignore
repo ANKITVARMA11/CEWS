@@ -1,0 +1,41 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling caches and reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local data, logs and generated output (folders are kept through .gitkeep)
+data/*.db
+data/raw/*
+data/staging/*
+data/processed/*
+data/exports/*
+!data/exports/powerbi/
+data/exports/powerbi/*
+data/fixtures/live_*
+logs/*
+reports/generated/*
+!**/.gitkeep
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

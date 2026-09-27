@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2025//EN" "https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_250101.dtd">
+<PubmedArticleSet>
+<PubmedArticle>
+  <MedlineCitation Status="MEDLINE" Owner="NLM">
+    <PMID Version="1">99000001</PMID>
+    <DateRevised><Year>2026</Year><Month>08</Month><Day>14</Day></DateRevised>
+    <Article PubModel="Print-Electronic">
+      <Journal>
+        <JournalIssue CitedMedium="Internet"><Volume>12</Volume><Issue>3</Issue>
+          <PubDate><Year>2026</Year><Month>Sep</Month></PubDate></JournalIssue>
+        <Title>Journal of Fixture Oncology</Title>
+        <ISOAbbreviation>J Fixture Oncol</ISOAbbreviation>
+      </Journal>
+      <ArticleTitle>Targeting KRAS with <i>FX-101</i>: a fixture study.</ArticleTitle>
+      <Abstract>
+        <AbstractText Label="BACKGROUND" NlmCategory="BACKGROUND">Fixture text for testing only.</AbstractText>
+        <AbstractText Label="RESULTS" NlmCategory="RESULTS">More fixture text.</AbstractText>
+      </Abstract>
+      <AuthorList CompleteYN="Y">
+        <Author ValidYN="Y"><LastName>Doe</LastName><ForeName>Jane</ForeName><Initials>J</Initials>
+          <AffiliationInfo><Affiliation>Fixture Oncology, Inc., Boston, MA, USA.</Affiliation></AffiliationInfo></Author>
+        <Author ValidYN="Y"><LastName>Roe</LastName><ForeName>Richard</ForeName><Initials>R</Initials>
+          <AffiliationInfo><Affiliation>Fixture University, Department of Medicine.</Affiliation></AffiliationInfo>
+          <AffiliationInfo><Affiliation>Fixture Oncology, Inc., Boston, MA, USA.</Affiliation></AffiliationInfo></Author>
+      </AuthorList>
+      <Language>eng</Language>
+      <PublicationTypeList><PublicationType UI="D016428">Journal Article</PublicationType></PublicationTypeList>
+      <ArticleDate DateType="Electronic"><Year>2026</Year><Month>08</Month><Day>11</Day></ArticleDate>
+    </Article>
+    <MeshHeadingList><MeshHeading><DescriptorName UI="D002289" MajorTopicYN="N">Carcinoma, Non-Small-Cell Lung</DescriptorName></MeshHeading></MeshHeadingList>
+    <KeywordList Owner="NOTNLM"><Keyword MajorTopicYN="N">KRAS</Keyword></KeywordList>
+  </MedlineCitation>
+  <PubmedData>
+    <History>
+      <PubMedPubDate PubStatus="received"><Year>2026</Year><Month>5</Month><Day>1</Day></PubMedPubDate>
+      <PubMedPubDate PubStatus="entrez"><Year>2026</Year><Month>8</Month><Day>12</Day><Hour>6</Hour><Minute>0</Minute></PubMedPubDate>
+    </History>
+    <PublicationStatus>aheadofprint</PublicationStatus>
+    <ArticleIdList><ArticleId IdType="pubmed">99000001</ArticleId><ArticleId IdType="doi">10.0000/fixture.0001</ArticleId></ArticleIdList>
+  </PubmedData>
+</PubmedArticle>
+<PubmedArticle>
+  <MedlineCitation Status="PubMed-not-MEDLINE" Owner="NLM">
+    <PMID Version="1">99000002</PMID>
+    <Article PubModel="Print">
+      <Journal>
+        <JournalIssue CitedMedium="Print"><PubDate><MedlineDate>2026 Jul-Aug</MedlineDate></PubDate></JournalIssue>
+        <Title>Fixture Gene Therapy Reports</Title>
+      </Journal>
+      <ArticleTitle>Consensus statement on fixture AAV dosing.</ArticleTitle>
+      <AuthorList CompleteYN="Y">
+        <Author ValidYN="Y"><CollectiveName>Fixture Gene Therapy Consortium</CollectiveName></Author>
+      </AuthorList>
+      <Language>eng</Language>
+      <PublicationTypeList><PublicationType UI="D016446">Consensus Development Conference</PublicationType></PublicationTypeList>
+    </Article>
+  </MedlineCitation>
+  <PubmedData>
+    <History><PubMedPubDate PubStatus="entrez"><Year>2026</Year><Month>8</Month><Day>13</Day></PubMedPubDate></History>
+    <ArticleIdList><ArticleId IdType="pubmed">99000002</ArticleId><ArticleId IdType="pmc">PMC99000002</ArticleId></ArticleIdList>
+  </PubmedData>
+</PubmedArticle>
+</PubmedArticleSet>

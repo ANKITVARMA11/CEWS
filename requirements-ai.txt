@@ -1,0 +1,2 @@
+# Optional local AI layers (CPU is enough). Installs a large PyTorch dependency.
+sentence-transformers>=2.7,<6

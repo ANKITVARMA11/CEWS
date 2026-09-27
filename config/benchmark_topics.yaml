@@ -1,0 +1,9 @@
+# Evaluation anchors only: historically established areas used to sanity-check backtests.
+# They are NEVER hard-coded as high-scoring trends. Add expected evaluation windows with a
+# subject-matter expert before using them in a backtest.
+benchmark_topics:
+  - {name: mRNA therapeutics, taxonomy_ref: mrna_therapeutics, evaluation_window: null}
+  - {name: CAR-T, taxonomy_ref: car_t, evaluation_window: null}
+  - {name: CRISPR gene editing, taxonomy_ref: crispr_gene_editing, evaluation_window: null}
+  - {name: Cancer vaccines, taxonomy_ref: cancer_vaccines, evaluation_window: null}
+  - {name: AI-assisted drug discovery, taxonomy_ref: ai_drug_discovery, evaluation_window: null}

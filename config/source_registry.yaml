@@ -1,0 +1,94 @@
+# Source registry. The four MVP sources were checked against their documentation on
+# 2026-09-22 (see docs/data_sources.md). Rate limits are deliberately conservative.
+# Company feeds are never hard-coded: add official RSS/IR feed URLs under generic_rss.feeds.
+#
+# Per-source keys (all optional except id, source_type, env_flag):
+#   requests_per_second, burst   rate limit for this source
+#   page_size                    records requested per page
+#   max_pages_per_run            safety cap; a capped run resumes from its checkpoint next time
+#   window_slice_days            date windows are collected in slices of this many days
+#                                (null = one request window, e.g. RSS feeds)
+#   timeout_seconds, max_retries override SOURCE_REQUEST_TIMEOUT_SECONDS / SOURCE_MAX_RETRIES
+#   refresh.mode                 incremental (every cycle) or full (only when the window is due)
+#   options                      adapter-specific settings, for example:
+#     query_terms: [..]          search these terms instead of THERAPEUTIC_AREAS
+#     query: "..."               a complete source-specific query (replaces the terms)
+#     store_abstracts: false     PubMed / Europe PMC: do not store abstracts
+#     study_type: ALL            ClinicalTrials.gov: default INTERVENTIONAL
+#     sources: [PPR, MED]        Europe PMC source codes (default: PPR only while PubMed is on)
+#     feed_organizations: {url: name}   generic_rss: company behind each feed
+registry_version: 2
+defaults:
+  requests_per_second: 1.0
+  burst: 1
+  page_size: 100
+  max_pages_per_run: 50
+  window_slice_days: 30
+
+sources:
+  - id: clinical_trials_gov
+    source_type: clinical_trial
+    env_flag: ENABLE_CLINICAL_TRIALS_GOV
+    base_url: https://clinicaltrials.gov/api/v2
+    auth: none
+    mvp: true
+    requests_per_second: 0.5      # no published limit; community reports ~50/minute
+    page_size: 500                # API maximum is 1000
+    options:
+      # Their firewall fingerprints TLS and answers 403 to httpx; the standard library is
+      # accepted. See docs/data_sources.md.
+      http_transport: stdlib
+    refresh: {mode: incremental}
+  - id: pubmed
+    source_type: publication
+    env_flag: ENABLE_PUBMED
+    base_url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils
+    auth: optional_api_key
+    mvp: true
+    requests_per_second: 2.5      # NCBI: 3/s without a key, 10/s with NCBI_API_KEY
+    page_size: 200                # PMIDs per esearch/efetch pair
+    max_pages_per_run: 100
+    window_slice_days: 7          # one search can only reach 10,000 records
+    refresh: {mode: incremental}
+  - id: europe_pmc
+    source_type: publication
+    env_flag: ENABLE_EUROPE_PMC
+    base_url: https://www.ebi.ac.uk/europepmc/webservices/rest
+    auth: none
+    mvp: true
+    requests_per_second: 2.0
+    page_size: 500                # must stay constant while paging; maximum 1000
+    refresh: {mode: incremental}
+  - id: openalex
+    source_type: publication
+    env_flag: ENABLE_OPENALEX
+    base_url: https://api.openalex.org
+    auth: api_key_required        # required since February 2026; see docs/data_sources.md
+    mvp: false
+    refresh: {mode: incremental}
+  - id: nih_reporter
+    source_type: funding
+    env_flag: ENABLE_NIH_REPORTER
+    base_url: https://api.reporter.nih.gov/v2
+    auth: none
+    mvp: false
+    refresh: {mode: full, full_refresh_window_days: 7}
+  - id: generic_rss
+    source_type: announcement
+    env_flag: ENABLE_GENERIC_RSS
+    auth: none
+    mvp: true
+    requests_per_second: 0.5
+    window_slice_days: null
+    feeds: []                     # add official company / investor-relations feed URLs here
+    # options:
+    #   feed_organizations:
+    #     https://www.example.com/news/rss.xml: Example Pharma
+    refresh: {mode: incremental}
+  - id: patents_uspto_bulk
+    source_type: patent
+    env_flag: ENABLE_PATENTS
+    base_url: https://data.uspto.gov
+    auth: api_key_may_be_required # verify on the USPTO Open Data Portal
+    mvp: false
+    refresh: {mode: full, full_refresh_window_days: 30}

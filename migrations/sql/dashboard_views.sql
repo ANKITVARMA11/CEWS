@@ -1,0 +1,3 @@
+-- dashboard_views.sql
+-- Star-schema views consumed by Power BI and the Streamlit dashboard.
+-- Placeholder created by scripts/bootstrap_project.py; planned for Phase 2 onward.

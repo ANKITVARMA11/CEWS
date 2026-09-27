@@ -1,0 +1,15 @@
+{
+  "header": {
+    "type": "einfo",
+    "version": "0.3"
+  },
+  "einforesult": {
+    "dbinfo": [
+      {
+        "dbname": "pubmed",
+        "description": "PubMed bibliographic record",
+        "count": "40000000"
+      }
+    ]
+  }
+}

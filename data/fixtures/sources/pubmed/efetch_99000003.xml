@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2025//EN" "https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_250101.dtd">
+<PubmedArticleSet>
+<PubmedArticle>
+  <MedlineCitation Status="In-Process" Owner="NLM">
+    <PMID Version="1">99000003</PMID>
+    <Article PubModel="Electronic">
+      <Journal>
+        <JournalIssue CitedMedium="Internet"><PubDate><Year>2026</Year></PubDate></JournalIssue>
+        <Title>Fixture Reviews in Immunology</Title>
+      </Journal>
+      <ArticleTitle>Checkpoint inhibitor combinations: a fixture review.</ArticleTitle>
+      <Abstract><AbstractText>Unstructured fixture abstract.</AbstractText></Abstract>
+      <AuthorList CompleteYN="Y">
+        <Author ValidYN="Y"><LastName>Poe</LastName><ForeName>Alex</ForeName>
+          <AffiliationInfo><Affiliation>Fixture Immunotherapies GmbH, Munich, Germany.</Affiliation></AffiliationInfo></Author>
+      </AuthorList>
+      <PublicationTypeList><PublicationType UI="D016454">Review</PublicationType><PublicationType UI="D016428">Journal Article</PublicationType></PublicationTypeList>
+    </Article>
+  </MedlineCitation>
+  <PubmedData>
+    <History><PubMedPubDate PubStatus="entrez"><Year>2026</Year><Month>8</Month><Day>14</Day></PubMedPubDate></History>
+    <ArticleIdList><ArticleId IdType="pubmed">99000003</ArticleId></ArticleIdList>
+  </PubmedData>
+</PubmedArticle>
+</PubmedArticleSet>

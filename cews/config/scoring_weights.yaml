@@ -1,0 +1,62 @@
+# Scoring configuration. Every weight set must sum to 1 (checked by tests and, from
+# Phase 7, validate_weights() at startup). If a component is unavailable its weight is
+# renormalized across the available components; it is never replaced by zero.
+scoring_version: "1.0.0"
+
+normalization:
+  method: percentile        # percentile | winsorized_minmax | robust_zscore | minmax
+  winsor_lower: 0.05
+  winsor_upper: 0.95
+  neutral_score: 50         # returned for constant or single-value cohorts
+
+features:
+  alpha: 1.0                # smoothing constant for log growth
+  momentum_recent_months: 3
+  momentum_previous_months: 3
+  velocity_window_months: 12
+  velocity_min_observations: 6      # assumption: the spec does not fix this value
+  sample_saturation_k: 25           # sample confidence = 1 - exp(-N / k)
+  freshness_half_life_days: 30      # assumption: the spec does not fix this value
+
+weight_sets:
+  # Change from the original spec: patents and funding are excluded from this composite
+  # because they already enter the Trend Score as separate components (double counting).
+  # Restore the original 0.30/0.30/0.20/0.10/0.10 split here if you prefer it.
+  composite_activity: {publication: 0.40, clinical_trial: 0.40, announcement: 0.20}
+  trend_score: {velocity: 0.30, momentum: 0.25, patent_growth: 0.20, funding_growth: 0.15, consistency: 0.10}
+  innovation_score: {patent: 0.40, clinical_trial: 0.30, publication: 0.20, funding: 0.10}
+  threat_score: {trial_growth: 0.50, patent_growth: 0.30, publication_growth: 0.20}
+  opportunity_score: {trend: 0.60, low_competition: 0.25, source_agreement: 0.15}
+  confidence_score: {sample: 0.35, source_agreement: 0.25, completeness: 0.20, freshness: 0.10, model_stability: 0.10}
+  competitor_discovery: {trial: 0.30, patent: 0.25, publication: 0.20, funding: 0.15, announcement: 0.10}
+
+competitor_discovery:
+  window_months: 12
+
+categories:
+  trend:
+    - {label: "Low activity or declining", min: 0, max: 39}
+    - {label: "Watchlist", min: 40, max: 59}
+    - {label: "Emerging", min: 60, max: 79}
+    - {label: "High priority", min: 80, max: 100}
+  opportunity:
+    - {label: "Low current opportunity", min: 0, max: 39}
+    - {label: "Monitor", min: 40, max: 59}
+    - {label: "Potential opportunity", min: 60, max: 79}
+    - {label: "High-priority opportunity for expert review", min: 80, max: 100}
+
+emerging_trend_rules:
+  min_trend_score: 60               # assumption: 'configured threshold' is not numeric in the spec
+  min_confidence: 60                # assumption; mirrors ALERT_MIN_CONFIDENCE
+  min_source_types: 2
+  exclude_single_spike: true
+
+threat_modifiers:
+  enabled: true
+  total_cap_points: 15              # assumption: the spec requires caps but gives no values
+  items:
+    new_therapeutic_area_entry: {max_points: 5}
+    phase_progression: {max_points: 5}
+    large_enrollment_increase: {max_points: 5}
+    monitored_topic_patent_activity: {max_points: 5}
+    multiple_supporting_sources: {max_points: 5}

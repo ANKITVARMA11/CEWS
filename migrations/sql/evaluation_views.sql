@@ -1,0 +1,3 @@
+-- evaluation_views.sql
+-- Views over evaluation runs, backtests and alert reviews.
+-- Placeholder created by scripts/bootstrap_project.py; planned for Phase 2 onward.

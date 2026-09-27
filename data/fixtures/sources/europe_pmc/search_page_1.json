@@ -1,0 +1,117 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "nextCursorMark": "FIXTURE_CURSOR_2",
+  "request": {
+    "queryString": "fixture",
+    "resultType": "core",
+    "cursorMark": "*",
+    "pageSize": 2,
+    "sort": "",
+    "synonym": false
+  },
+  "resultList": {
+    "result": [
+      {
+        "id": "PPR990001",
+        "source": "PPR",
+        "doi": "10.0000/fixture.pp1",
+        "title": "A fixture preprint on <i>mRNA</i> cancer vaccines",
+        "authorString": "Doe J, Roe R.",
+        "authorList": {
+          "author": [
+            {
+              "fullName": "Doe J",
+              "firstName": "Jane",
+              "lastName": "Doe",
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {
+                    "affiliation": "Fixture Vaccines GmbH, Berlin, Germany"
+                  }
+                ]
+              }
+            },
+            {
+              "fullName": "Roe R",
+              "firstName": "Richard",
+              "lastName": "Roe",
+              "affiliation": "Fixture University"
+            }
+          ]
+        },
+        "pubYear": "2026",
+        "abstractText": "<h4>Background</h4>Fixture abstract text for testing only.",
+        "pubTypeList": {
+          "pubType": [
+            "preprint"
+          ]
+        },
+        "bookOrReportDetails": {
+          "publisher": "bioRxiv",
+          "yearOfPublication": 2026
+        },
+        "isOpenAccess": "Y",
+        "citedByCount": 0,
+        "firstIndexDate": "2026-08-07",
+        "firstPublicationDate": "2026-08-05"
+      },
+      {
+        "id": "99000010",
+        "source": "MED",
+        "pmid": "99000010",
+        "pmcid": "PMC99000010",
+        "doi": "10.0000/fixture.0010",
+        "title": "Fixture checkpoint inhibitor outcomes in melanoma.",
+        "authorString": "Poe A.",
+        "authorList": {
+          "author": [
+            {
+              "fullName": "Poe A",
+              "firstName": "Alex",
+              "lastName": "Poe",
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {
+                    "affiliation": "Fixture Immunotherapies GmbH, Munich, Germany."
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "journalInfo": {
+          "journal": {
+            "title": "Journal of Fixture Immunology",
+            "isoabbreviation": "J Fixture Immunol"
+          }
+        },
+        "pubYear": "2026",
+        "abstractText": "Fixture abstract for a journal article.",
+        "pubTypeList": {
+          "pubType": [
+            "research-article",
+            "Journal Article"
+          ]
+        },
+        "meshHeadingList": {
+          "meshHeading": [
+            {
+              "majorTopic_YN": "N",
+              "descriptorName": "Melanoma"
+            }
+          ]
+        },
+        "keywordList": {
+          "keyword": [
+            "checkpoint inhibitor"
+          ]
+        },
+        "isOpenAccess": "N",
+        "citedByCount": 3,
+        "firstIndexDate": "2026-08-10",
+        "firstPublicationDate": "2026-08-09"
+      }
+    ]
+  }
+}

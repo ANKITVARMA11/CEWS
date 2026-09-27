@@ -1,0 +1,28 @@
+# Starter taxonomy. Deterministic keyword/phrase matching is the default method.
+# Edit freely: no code change is needed. Topics discovered by the optional AI layer are
+# stored in the database as candidates and never written back to this file.
+taxonomy_version: 1
+
+therapeutic_areas:
+  - {id: oncology, name: Oncology, parent: null, synonyms: [cancer, tumor, tumour, neoplasm, carcinoma, leukemia, lymphoma]}
+  - {id: cancer_vaccines, name: Cancer Vaccines, parent: oncology, synonyms: [cancer vaccine, tumor vaccine, neoantigen vaccine]}
+  - {id: car_t, name: CAR-T, parent: oncology, synonyms: [CAR T, CAR-T cell, chimeric antigen receptor]}
+  - {id: neurology, name: Neurology, parent: null, synonyms: [neurological, neurodegenerative, alzheimer, parkinson, multiple sclerosis]}
+  - {id: immunology, name: Immunology, parent: null, synonyms: [autoimmune, immune-mediated, inflammation]}
+  - {id: rare_diseases, name: Rare Diseases, parent: null, synonyms: [orphan disease, orphan drug, rare disease]}
+  - {id: gene_therapy, name: Gene Therapy, parent: null, synonyms: [gene transfer, gene replacement, viral vector]}
+  - {id: rna_therapeutics, name: RNA Therapeutics, parent: null, synonyms: [RNA-based therapy, oligonucleotide therapy]}
+
+topics:
+  - {id: mrna_therapeutics, name: mRNA therapeutics, type: modality, area: rna_therapeutics, synonyms: [mRNA vaccine, messenger RNA, mRNA-based]}
+  - {id: sirna_rnai, name: siRNA and RNA interference, type: modality, area: rna_therapeutics, synonyms: [siRNA, RNAi, RNA interference, antisense oligonucleotide]}
+  - {id: crispr_gene_editing, name: CRISPR gene editing, type: technology, area: gene_therapy, synonyms: [CRISPR, Cas9, base editing, prime editing, gene editing]}
+  - {id: aav_vectors, name: AAV gene delivery, type: technology, area: gene_therapy, synonyms: [AAV, adeno-associated virus]}
+  - {id: immune_checkpoint, name: Immune checkpoint inhibitors, type: modality, area: oncology, synonyms: [PD-1, PD-L1, checkpoint inhibitor, immune checkpoint]}
+  - {id: bispecific_antibodies, name: Bispecific antibodies, type: modality, area: oncology, synonyms: [bispecific antibody, T-cell engager, T cell engager]}
+  - {id: neurodegeneration, name: Neurodegeneration, type: disease_area, area: neurology, synonyms: [amyloid beta, tau protein, neurodegenerative disease]}
+  - {id: ai_drug_discovery, name: AI-assisted drug discovery, type: technology, area: null, synonyms: [AI drug discovery, machine learning drug discovery, generative chemistry]}
+
+matching:
+  default_method: keyword           # keyword | tfidf | embedding (tfidf/embedding are optional)
+  min_confidence: 0.5

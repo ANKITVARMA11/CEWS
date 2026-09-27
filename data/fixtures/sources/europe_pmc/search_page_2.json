@@ -1,0 +1,47 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "nextCursorMark": "FIXTURE_CURSOR_2",
+  "request": {
+    "queryString": "fixture",
+    "resultType": "core",
+    "cursorMark": "FIXTURE_CURSOR_2",
+    "pageSize": 2,
+    "sort": "",
+    "synonym": false
+  },
+  "resultList": {
+    "result": [
+      {
+        "id": "PPR990002",
+        "source": "PPR",
+        "title": "Fixture base editing in primary T cells",
+        "authorList": {
+          "author": [
+            {
+              "fullName": "Lee K",
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {
+                    "affiliation": "Fixture Genetics Ltd, Cambridge, UK"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "pubYear": "2026",
+        "pubTypeList": {
+          "pubType": [
+            "preprint"
+          ]
+        },
+        "bookOrReportDetails": {
+          "publisher": "medRxiv"
+        },
+        "firstIndexDate": "2026-08-15",
+        "firstPublicationDate": "2026-08-14"
+      }
+    ]
+  }
+}

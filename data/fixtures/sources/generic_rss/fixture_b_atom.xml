@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Fixture Genetics Investor Relations</title>
+  <id>urn:fixture:genetics:ir</id>
+  <updated>2026-08-20T12:00:00Z</updated>
+  <entry>
+    <title>Fixture Genetics reports second-quarter results</title>
+    <link href="https://ir.fixture-b.test/news/q2-results"/>
+    <id>urn:fixture:genetics:ir:q2</id>
+    <published>2026-08-06T12:00:00Z</published>
+    <updated>2026-08-07T08:00:00Z</updated>
+    <summary type="html">&lt;p&gt;Fixture quarterly update.&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Fixture Genetics receives clearance for FX-AAV9 study</title>
+    <link href="https://ir.fixture-b.test/news/clearance"/>
+    <id>urn:fixture:genetics:ir:clearance</id>
+    <published>2026-08-20T12:00:00Z</published>
+    <summary>Fixture regulatory update.</summary>
+  </entry>
+</feed>

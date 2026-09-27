@@ -1,0 +1,41 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT09000003",
+          "officialTitle": "Registry of Fixture CAR-T Recipients"
+        },
+        "statusModule": {
+          "overallStatus": "COMPLETED",
+          "startDateStruct": {
+            "date": "2024-01-15",
+            "type": "ACTUAL"
+          },
+          "completionDateStruct": {
+            "date": "2026-07",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateStruct": {
+            "date": "2026-08-18",
+            "type": "ACTUAL"
+          }
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Fixture Cell Therapies Corp",
+            "class": "INDUSTRY"
+          }
+        },
+        "designModule": {
+          "studyType": "INTERVENTIONAL",
+          "enrollmentInfo": {
+            "count": 300,
+            "type": "ACTUAL"
+          }
+        }
+      },
+      "hasResults": true
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "studies": [
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT09000001",
+          "briefTitle": "A Study of FX-101 in Adults With KRAS-Mutant Non-Small Cell Lung Cancer",
+          "officialTitle": "A Phase 1/2, Open-Label Study of FX-101 in Participants With Advanced Solid Tumors"
+        },
+        "statusModule": {
+          "overallStatus": "RECRUITING",
+          "startDateStruct": {
+            "date": "2026-03",
+            "type": "ACTUAL"
+          },
+          "primaryCompletionDateStruct": {
+            "date": "2027-12",
+            "type": "ESTIMATED"
+          },
+          "completionDateStruct": {
+            "date": "2028-06-30",
+            "type": "ESTIMATED"
+          },
+          "studyFirstPostDateStruct": {
+            "date": "2026-02-10",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateStruct": {
+            "date": "2026-08-12",
+            "type": "ACTUAL"
+          }
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Fixture Oncology, Inc.",
+            "class": "INDUSTRY"
+          },
+          "collaborators": [
+            {
+              "name": "Fixture University Hospital",
+              "class": "OTHER"
+            }
+          ]
+        },
+        "descriptionModule": {
+          "briefSummary": "Fixture text: this study evaluates the <b>safety</b> of FX-101 in advanced solid tumors."
+        },
+        "conditionsModule": {
+          "conditions": [
+            "Non-small Cell Lung Cancer",
+            "Solid Tumor"
+          ],
+          "keywords": [
+            "KRAS"
+          ]
+        },
+        "designModule": {
+          "studyType": "INTERVENTIONAL",
+          "phases": [
+            "PHASE1",
+            "PHASE2"
+          ],
+          "enrollmentInfo": {
+            "count": 120,
+            "type": "ESTIMATED"
+          }
+        },
+        "armsInterventionsModule": {
+          "interventions": [
+            {
+              "type": "DRUG",
+              "name": "FX-101"
+            },
+            {
+              "type": "DRUG",
+              "name": "Placebo comparator"
+            }
+          ]
+        },
+        "contactsLocationsModule": {
+          "centralContacts": [
+            {
+              "name": "Placeholder Contact",
+              "role": "CONTACT",
+              "phone": "000-000-0000",
+              "email": "placeholder@example.invalid"
+            }
+          ],
+          "overallOfficials": [
+            {
+              "name": "Placeholder Official",
+              "role": "PRINCIPAL_INVESTIGATOR"
+            }
+          ],
+          "locations": [
+            {
+              "facility": "Fixture Cancer Center",
+              "country": "United States",
+              "contacts": [
+                {
+                  "name": "Placeholder Site Contact",
+                  "email": "site@example.invalid"
+                }
+              ]
+            },
+            {
+              "facility": "Fixture Clinic Osaka",
+              "country": "Japan"
+            },
+            {
+              "facility": "Fixture Cancer Center 2",
+              "country": "United States"
+            }
+          ]
+        }
+      },
+      "hasResults": false
+    },
+    {
+      "protocolSection": {
+        "identificationModule": {
+          "nctId": "NCT09000002",
+          "briefTitle": "Gene Therapy FX-AAV9 for a Rare Neuromuscular Disorder"
+        },
+        "statusModule": {
+          "overallStatus": "NOT_YET_RECRUITING",
+          "startDateStruct": {
+            "date": "2026-10",
+            "type": "ESTIMATED"
+          },
+          "studyFirstPostDateStruct": {
+            "date": "2026-08-05",
+            "type": "ACTUAL"
+          },
+          "lastUpdatePostDateStruct": {
+            "date": "2026-08-05",
+            "type": "ACTUAL"
+          }
+        },
+        "sponsorCollaboratorsModule": {
+          "leadSponsor": {
+            "name": "Fixture Genetics Ltd",
+            "class": "INDUSTRY"
+          }
+        },
+        "conditionsModule": {
+          "conditions": [
+            "Rare Neuromuscular Disorder"
+          ]
+        },
+        "designModule": {
+          "studyType": "INTERVENTIONAL",
+          "phases": [
+            "EARLY_PHASE1"
+          ],
+          "enrollmentInfo": {
+            "count": 12,
+            "type": "ESTIMATED"
+          }
+        },
+        "armsInterventionsModule": {
+          "interventions": [
+            {
+              "type": "GENETIC",
+              "name": "FX-AAV9"
+            }
+          ]
+        }
+      },
+      "hasResults": false
+    }
+  ],
+  "nextPageToken": "FIXTURE_PAGE_TOKEN_2"
+}

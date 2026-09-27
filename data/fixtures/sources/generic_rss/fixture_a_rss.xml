@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture Oncology News</title>
+    <link>https://news.fixture-a.test/</link>
+    <description>Fixture press releases (invented)</description>
+    <item>
+      <title>Fixture Oncology doses first patient in Phase 2 trial of FX-101</title>
+      <link>https://news.fixture-a.test/releases/fx-101-phase-2</link>
+      <guid isPermaLink="false">fixture-a-0001</guid>
+      <pubDate>Tue, 11 Aug 2026 13:00:00 GMT</pubDate>
+      <description>&lt;p&gt;Fixture Oncology announced &lt;b&gt;first patient dosed&lt;/b&gt; (fixture text).&lt;/p&gt;</description>
+      <category>Clinical</category>
+    </item>
+    <item>
+      <title>Fixture Oncology enters licensing agreement with Fixture Genetics</title>
+      <link>https://news.fixture-a.test/releases/licensing</link>
+      <guid isPermaLink="false">fixture-a-0002</guid>
+      <pubDate>Mon, 24 Aug 2026 09:30:00 +0000</pubDate>
+      <description>Fixture licensing announcement.</description>
+    </item>
+    <item>
+      <title>Older fixture release outside the window</title>
+      <link>https://news.fixture-a.test/releases/old</link>
+      <guid isPermaLink="false">fixture-a-0000</guid>
+      <pubDate>Wed, 15 Jul 2026 08:00:00 GMT</pubDate>
+      <description>Old fixture text.</description>
+    </item>
+    <item>
+      <title>Undated fixture release</title>
+      <link>https://news.fixture-a.test/releases/undated</link>
+      <guid isPermaLink="false">fixture-a-undated</guid>
+      <description>No date on purpose.</description>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,60 @@
+# Source registry. Endpoints below are starting points taken from public documentation and
+# MUST be re-verified against the official docs before each adapter is written (Phase 3-4).
+# Rate limits are deliberately conservative defaults, not documented limits.
+# Company feeds are never hard-coded: add official RSS/IR feed URLs under generic_rss.feeds.
+registry_version: 1
+defaults:
+  requests_per_second: 1.0
+  timeout_seconds: 30
+  max_retries: 3
+
+sources:
+  - id: clinical_trials_gov
+    source_type: clinical_trial
+    env_flag: ENABLE_CLINICAL_TRIALS_GOV
+    base_url: https://clinicaltrials.gov/api/v2
+    auth: none
+    mvp: true
+    refresh: {mode: incremental, check_every: fetch_interval}
+  - id: pubmed
+    source_type: publication
+    env_flag: ENABLE_PUBMED
+    base_url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils
+    auth: optional_api_key
+    mvp: true
+    refresh: {mode: incremental, check_every: fetch_interval}
+  - id: europe_pmc
+    source_type: publication
+    env_flag: ENABLE_EUROPE_PMC
+    base_url: https://www.ebi.ac.uk/europepmc/webservices/rest
+    auth: none
+    mvp: true
+    refresh: {mode: incremental, check_every: fetch_interval}
+  - id: openalex
+    source_type: publication
+    env_flag: ENABLE_OPENALEX
+    base_url: https://api.openalex.org
+    auth: api_key_required        # required since February 2026; see docs/data_sources.md
+    mvp: false
+    refresh: {mode: incremental, check_every: fetch_interval}
+  - id: nih_reporter
+    source_type: funding
+    env_flag: ENABLE_NIH_REPORTER
+    base_url: https://api.reporter.nih.gov/v2
+    auth: none
+    mvp: false
+    refresh: {mode: full, check_every: fetch_interval, full_refresh_window_days: 7}
+  - id: generic_rss
+    source_type: announcement
+    env_flag: ENABLE_GENERIC_RSS
+    auth: none
+    mvp: true
+    feeds: []                     # add official company / investor-relations feed URLs here
+    refresh: {mode: incremental, check_every: fetch_interval}
+  - id: patents_uspto_bulk
+    source_type: patent
+    env_flag: ENABLE_PATENTS
+    base_url: https://data.uspto.gov
+    auth: api_key_may_be_required # verify on the USPTO Open Data Portal
+    mvp: false
+    refresh: {mode: full, check_every: fetch_interval, full_refresh_window_days: 30}

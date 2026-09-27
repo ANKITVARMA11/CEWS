@@ -1,0 +1,3 @@
+-- create_views.sql
+-- Core analytical views over the CEWS tables.
+-- Placeholder created by scripts/bootstrap_project.py; planned for Phase 2 onward.

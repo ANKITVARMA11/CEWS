@@ -1,0 +1,3 @@
+-- data_quality_checks.sql
+-- SQL data-quality checks (required fields, uniqueness, integrity).
+-- Placeholder created by scripts/bootstrap_project.py; planned for Phase 2 onward.
