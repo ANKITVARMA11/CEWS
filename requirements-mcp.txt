@@ -1,0 +1,5 @@
+# Optional: the read-only MCP server (cews mcp-serve) and the agents built on it
+# (cews agent ..., the dashboard chat widget). See docs/agents.md.
+mcp>=1.2,<2
+pypdf>=4.0,<6
+python-docx>=1.1,<2

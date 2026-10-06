@@ -111,6 +111,35 @@ def create_memory_engine() -> Engine:
     return create_db_engine("sqlite://")
 
 
+def create_read_only_engine(settings: Settings) -> Engine:
+    """An engine that cannot change the database, for anything that only ever reads it.
+
+    Every connection is switched to read-only at the database itself (SQLite ``query_only``,
+    PostgreSQL ``default_transaction_read_only``), so a bug or a hostile request cannot write
+    even by accident: the write is refused by the database, not by application code that could
+    be wrong. A missing SQLite file is an error rather than being quietly created empty.
+
+    Raises:
+        DatabaseError: if the SQLite file does not exist.
+    """
+    url = build_database_url(settings)
+    is_file_db = url.get_backend_name() == "sqlite" and not _is_memory(url)
+    if is_file_db and not Path(str(url.database)).is_file():
+        raise DatabaseError(f"database not found at {url.database}; run: cews db-init")
+    engine = create_db_engine(url)
+
+    @event.listens_for(engine, "connect")
+    def _read_only(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        if engine.dialect.name == "sqlite":
+            cursor.execute("PRAGMA query_only=ON")
+        else:
+            cursor.execute("SET default_transaction_read_only = on")
+        cursor.close()
+
+    return engine
+
+
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     """Return a session factory bound to ``engine`` (objects stay usable after commit)."""
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)

@@ -1,4 +1,4 @@
-# Runtime dependencies (bounded). Keep in sync with pyproject.toml.
+pytest -m unit -qpytest -m unit -qpytest -m unit -q# Runtime dependencies (bounded). Keep in sync with pyproject.toml.
 pydantic>=2.6,<3
 pydantic-settings>=2.2,<3
 python-dotenv>=1.0,<2

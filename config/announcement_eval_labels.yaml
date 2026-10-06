@@ -1,0 +1,77 @@
+# Hand-labelled announcements for evaluating announcement classification (Phase 11c).
+# All companies and products are invented. The wording is deliberately varied and natural:
+# it was written to look like real press-release headlines, NOT to match the keyword rules,
+# so measured accuracy reflects how the classifier copes with ordinary phrasing.
+#
+# Label definitions used:
+#   licensing          rights to a product or technology are granted to another party
+#   partnership        a collaboration or joint effort, with no transfer of rights or ownership
+#   acquisition        one company buys, or merges with, another
+#   funding            money is raised (financing round, IPO, placement, grant)
+#   clinical_milestone a trial starts, enrolls, or reports data
+#   regulatory         an approval, clearance, designation or filing with a regulator
+#   other              anything else (people, sites, earnings, events)
+announcements:
+  # ---- licensing ----
+  - {id: L1, label: licensing, text: "Varethyn Labs grants Orvexa Bio exclusive rights to its oral kinase inhibitor in Asia in exchange for an upfront payment and royalties"}
+  - {id: L2, label: licensing, text: "Halcyra Biosciences signs exclusive license agreement with Nexoria Genetics for a gene delivery platform"}
+  - {id: L3, label: licensing, text: "Zentavia Pharma in-licenses a preclinical antibody program from Kestrel Therapeutics"}
+  - {id: L4, label: licensing, text: "Mirandel Bio secures worldwide commercial rights to a rare disease enzyme therapy from Talvora Sciences"}
+  - {id: L5, label: licensing, text: "Quillon Health licenses its diagnostic algorithm to Brannock Diagnostics for a milestone-based fee"}
+  - {id: L6, label: licensing, text: "Solmere Pharma out-licenses its inhaled peptide to Dunmore Respiratory, retaining rights in Europe"}
+  - {id: L7, label: licensing, text: "Ardenvale Biologics obtains an option to license two bispecific candidates from Pellham Immuno"}
+  - {id: L8, label: licensing, text: "Corvane Sciences grants Illyrian Therapeutics regional rights to its long-acting insulin"}
+  # ---- partnership ----
+  - {id: P1, label: partnership, text: "Orvexa Labs and Halcyra Biosciences announce a strategic partnership to co-develop cell therapies"}
+  - {id: P2, label: partnership, text: "Talvora Sciences teams up with Brannock Diagnostics on a joint biomarker discovery program"}
+  - {id: P3, label: partnership, text: "Kestrel Therapeutics enters research collaboration with the Ridgemont Institute on neurodegeneration targets"}
+  - {id: P4, label: partnership, text: "Nexoria Genetics and Solmere Pharma launch a joint venture to manufacture viral vectors"}
+  - {id: P5, label: partnership, text: "Dunmore Respiratory partners with Quillon Health to build an AI-guided dosing platform"}
+  - {id: P6, label: partnership, text: "Pellham Immuno and Mirandel Bio agree to share screening data in a three-year alliance"}
+  - {id: P7, label: partnership, text: "Illyrian Therapeutics collaborates with Corvane Sciences on next-generation delivery technology"}
+  - {id: P8, label: partnership, text: "Ardenvale Biologics joins a consortium of six companies studying antimicrobial resistance"}
+  # ---- acquisition ----
+  - {id: A1, label: acquisition, text: "Zentavia Pharma to acquire Nexoria Genetics in a $1.2 billion all-cash deal"}
+  - {id: A2, label: acquisition, text: "Halcyra Biosciences completes purchase of Ridgemont Analytics"}
+  - {id: A3, label: acquisition, text: "Varethyn Labs agrees to be bought by Solmere Pharma for $640 million"}
+  - {id: A4, label: acquisition, text: "Talvora Sciences and Kestrel Therapeutics announce merger of equals"}
+  - {id: A5, label: acquisition, text: "Brannock Diagnostics buys out its remaining partners and takes full ownership of the Quillon joint lab"}
+  - {id: A6, label: acquisition, text: "Mirandel Bio has acquired Pellham Immuno, adding three clinical-stage assets"}
+  - {id: A7, label: acquisition, text: "Dunmore Respiratory snaps up a small inhaler maker to expand its device portfolio"}
+  - {id: A8, label: acquisition, text: "Corvane Sciences takes over Illyrian Therapeutics after shareholders approve the offer"}
+  # ---- funding ----
+  - {id: F1, label: funding, text: "Nexoria Genetics closes $50 million Series B financing round"}
+  - {id: F2, label: funding, text: "Kestrel Therapeutics raises $120 million in its initial public offering"}
+  - {id: F3, label: funding, text: "Ardenvale Biologics secures $18 million grant to advance its tuberculosis vaccine"}
+  - {id: F4, label: funding, text: "Quillon Health completes oversubscribed seed round led by Meridian Ventures"}
+  - {id: F5, label: funding, text: "Pellham Immuno announces $75 million private placement to fund late-stage trials"}
+  - {id: F6, label: funding, text: "Solmere Pharma prices public offering of common stock, expecting gross proceeds of $90 million"}
+  - {id: F7, label: funding, text: "Brannock Diagnostics lands a new round of investment to scale its testing network"}
+  - {id: F8, label: funding, text: "Illyrian Therapeutics obtains a non-dilutive award from a national health agency to support its rare disease work"}
+  # ---- clinical_milestone ----
+  - {id: C1, label: clinical_milestone, text: "Zentavia Pharma doses first patient in Phase 3 study of its lead oncology candidate"}
+  - {id: C2, label: clinical_milestone, text: "Halcyra Biosciences reports positive topline results from Phase 2 trial in atopic dermatitis"}
+  - {id: C3, label: clinical_milestone, text: "Varethyn Labs completes enrollment ahead of schedule in its pivotal diabetes study"}
+  - {id: C4, label: clinical_milestone, text: "Talvora Sciences announces its cell therapy met the primary endpoint in a mid-stage lymphoma trial"}
+  - {id: C5, label: clinical_milestone, text: "Mirandel Bio presents encouraging interim safety data at a major hematology congress"}
+  - {id: C6, label: clinical_milestone, text: "Corvane Sciences begins dosing in a first-in-human trial of its RNA therapeutic"}
+  - {id: C7, label: clinical_milestone, text: "Dunmore Respiratory discontinues Phase 2 asthma study after futility analysis"}
+  - {id: C8, label: clinical_milestone, text: "Ridgemont Institute publishes long-term follow-up showing durable responses in the gene therapy cohort"}
+  # ---- regulatory ----
+  - {id: R1, label: regulatory, text: "Varethyn Labs receives FDA approval for its once-daily hypertension therapy"}
+  - {id: R2, label: regulatory, text: "Kestrel Therapeutics granted orphan drug designation for a rare neuromuscular disease candidate"}
+  - {id: R3, label: regulatory, text: "Nexoria Genetics submits marketing authorization application to the European Medicines Agency"}
+  - {id: R4, label: regulatory, text: "Solmere Pharma's inhaled peptide earns breakthrough therapy designation"}
+  - {id: R5, label: regulatory, text: "Quillon Health obtains regulatory clearance for its point-of-care diagnostic device"}
+  - {id: R6, label: regulatory, text: "Pellham Immuno receives clearance to begin US trials after its investigational new drug application is accepted"}
+  - {id: R7, label: regulatory, text: "Illyrian Therapeutics gets fast track status for its pediatric epilepsy program"}
+  - {id: R8, label: regulatory, text: "Brannock Diagnostics wins approval from Japan's regulator for its cancer screening test"}
+  # ---- other ----
+  - {id: O1, label: other, text: "Zentavia Pharma appoints Dr. Lena Okafor as chief medical officer"}
+  - {id: O2, label: other, text: "Halcyra Biosciences opens a new manufacturing facility outside Dublin"}
+  - {id: O3, label: other, text: "Talvora Sciences reports second-quarter revenue of $210 million"}
+  - {id: O4, label: other, text: "Mirandel Bio to present at the annual healthcare investor conference next month"}
+  - {id: O5, label: other, text: "Dunmore Respiratory announces plan to relocate its headquarters to Boston"}
+  - {id: O6, label: other, text: "Corvane Sciences names new chair of its board of directors"}
+  - {id: O7, label: other, text: "Ardenvale Biologics launches a patient education website for its approved therapy"}
+  - {id: O8, label: other, text: "Kestrel Therapeutics announces restructuring and a reduction of about ten percent of its workforce"}

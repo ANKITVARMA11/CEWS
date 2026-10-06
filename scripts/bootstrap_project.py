@@ -143,6 +143,7 @@ _PHASE_RULES: tuple[tuple[str, int], ...] = (
     ("src/cews/insights/", 10),
     ("src/cews/validation/", 11),
     ("src/cews/scheduler/", 12),
+    ("src/cews/mcp_server/", 12),
     ("src/cews/exports/", 12),
     ("src/cews/api/", 12),
     ("src/cews/database/", 2),
@@ -311,9 +312,13 @@ SRC_MODULES: dict[str, tuple[str, ...]] = {
         "ranking_metrics",
         "alert_metrics",
         "ai_ablation",
+        "benchmark_topics",
+        "robustness",
+        "expert_review",
         "evaluation_report",
     ),
     "src/cews/scheduler": ("jobs", "scheduler", "job_state"),
+    "src/cews/mcp_server": ("tools", "server"),
     "src/cews/exports": ("csv_export", "powerbi_export", "report_export"),
     "src/cews/api": ("app", "dependencies"),
     "src/cews/api/routes": (
@@ -450,6 +455,7 @@ RUNTIME_DEPS: tuple[str, ...] = (
     "statsmodels>=0.14,<1",
     "rapidfuzz>=3.6,<4",
     "APScheduler>=3.10,<4",
+    "portalocker>=2.8,<4",
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.29,<1",
     "streamlit>=1.32,<2",
@@ -459,6 +465,13 @@ RUNTIME_DEPS: tuple[str, ...] = (
 )
 
 AI_DEPS: tuple[str, ...] = ("sentence-transformers>=2.7,<6",)
+MCP_DEPS: tuple[str, ...] = (
+    "mcp>=1.2,<2",
+    # For cews.agents.documents: whole-document reading for a chat attachment, no chunking, no
+    # ML layout models (see the module for why not docling).
+    "pypdf>=4.0,<6",
+    "python-docx>=1.1,<2",
+)
 
 DEV_DEPS: tuple[str, ...] = (
     "pytest>=8.0,<10",
@@ -581,6 +594,8 @@ AI_MAX_DOCS_PER_RUN=5000
 
 # ---- Scoring ----
 SCORING_CONFIG_FILE=./config/scoring_weights.yaml
+BENCHMARK_TOPICS_FILE=./config/benchmark_topics.yaml
+ANNOUNCEMENT_LABELS_FILE=./config/announcement_eval_labels.yaml
 MIN_TOPIC_SAMPLE_SIZE=10
 # percentile | winsorized_minmax | robust_zscore | minmax
 NORMALIZATION_METHOD=percentile
@@ -693,6 +708,7 @@ dependencies = __RUNTIME__
 
 [project.optional-dependencies]
 ai = __AI__
+mcp = __MCP__
 dev = __DEV__
 
 [project.scripts]
@@ -1436,18 +1452,25 @@ def build_manifest() -> Manifest:
     pyproject = (
         PYPROJECT_TEMPLATE.replace("__RUNTIME__", _toml_list(RUNTIME_DEPS))
         .replace("__AI__", _toml_list(AI_DEPS))
+        .replace("__MCP__", _toml_list(MCP_DEPS))
         .replace("__DEV__", _toml_list(DEV_DEPS))
     )
     requirements = "# Runtime dependencies (bounded). Keep in sync with pyproject.toml.\n"
     requirements += "\n".join(RUNTIME_DEPS) + "\n"
     requirements_dev = (
         "# Development dependencies. Installs runtime dependencies too.\n-r requirements.txt\n"
+        "-r requirements-mcp.txt\n"
     )
     requirements_dev += "\n".join(DEV_DEPS) + "\n"
     requirements_ai = (
         "# Optional local AI layers (CPU is enough). Installs a large PyTorch dependency.\n"
     )
     requirements_ai += "\n".join(AI_DEPS) + "\n"
+    requirements_mcp = (
+        "# Optional: the read-only MCP server (cews mcp-serve) and the agents built on it\n"
+        "# (cews agent ..., the dashboard chat widget). See docs/agents.md.\n"
+    )
+    requirements_mcp += "\n".join(MCP_DEPS) + "\n"
     makefile = MAKEFILE_TEMPLATE.replace("<TAB>", "\t")
 
     add(".env.example", ENV_EXAMPLE, critical=True)
@@ -1458,6 +1481,7 @@ def build_manifest() -> Manifest:
     add("requirements.txt", requirements, critical=True)
     add("requirements-dev.txt", requirements_dev, critical=True)
     add("requirements-ai.txt", requirements_ai, critical=True)
+    add("requirements-mcp.txt", requirements_mcp, critical=True)
     add("Makefile", makefile, critical=True)
     add("docker-compose.yml", DOCKER_COMPOSE, critical=True)
     add("pytest.ini", PYTEST_INI, critical=True)

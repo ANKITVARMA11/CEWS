@@ -15,6 +15,7 @@ from cews.database.connection import create_memory_engine, create_session_factor
 from cews.database.migrations import upgrade_database
 from cews.database.models import (
     Organization,
+    OrganizationAlias,
     RecordOrganization,
     RecordTopic,
     ReviewQueueItem,
@@ -166,7 +167,7 @@ def test_topic_assignments_carry_their_confidence(
             .group_by(Topic.key)
         ).all()
         confidences = session.scalars(select(RecordTopic.confidence)).all()
-    assigned = dict(rows)
+    assigned = {key: count for key, count in rows}
     assert "crispr_gene_editing" in assigned
     assert all(0 < value <= 0.95 for value in confidences)
 
@@ -391,3 +392,148 @@ def test_discovery_without_data_says_so(
     result = _discover(factory, settings.model_copy(update={"competitor_mode": "AUTO"}))
     assert result.monitored == []
     assert any("nothing to rank" in warning for warning in result.warnings)
+
+
+# --------------------------------------------------------------------------------------
+# Committing in batches: an interrupted run keeps what it finished
+# --------------------------------------------------------------------------------------
+BATCH = 100
+
+
+def _fingerprint(factory: sessionmaker[Session]) -> dict[str, Any]:
+    """Everything normalization produces, in a form that can be compared between runs."""
+    with session_scope(factory) as session:
+        return {
+            "statuses": {
+                status: count
+                for status, count in session.execute(
+                    select(SourceRecord.processing_status, func.count()).group_by(
+                        SourceRecord.processing_status
+                    )
+                ).all()
+            },
+            "organizations": sorted(
+                (o.canonical_name, o.organization_type)
+                for o in session.scalars(select(Organization))
+            ),
+            "org_links": session.scalar(select(func.count()).select_from(RecordOrganization)),
+            "topic_links": session.scalar(select(func.count()).select_from(RecordTopic)),
+            "review": sorted(
+                (q.queue_type, q.subject_ref) for q in session.scalars(select(ReviewQueueItem))
+            ),
+        }
+
+
+class Interrupted(Exception):
+    """Stands in for the process dying part-way through."""
+
+
+def test_committing_each_batch_gives_exactly_the_same_result(
+    settings: Settings, taxonomy: Taxonomy
+) -> None:
+    def run(commit: bool) -> dict[str, Any]:
+        engine = create_memory_engine()
+        upgrade_database(engine)
+        factory = create_session_factory(engine)
+        with session_scope(factory) as session:
+            sync_taxonomy(session, taxonomy)
+            load_demo_dataset(session, generate_demo_dataset(DemoConfig(scale=0.2)))
+        with session_scope(factory) as session:
+            normalize_records(
+                session, settings, taxonomy, batch_size=BATCH, commit_each_batch=commit
+            )
+        result = _fingerprint(factory)
+        engine.dispose()
+        return result
+
+    assert run(True) == run(False)
+
+
+def test_an_interrupted_run_keeps_the_batches_it_finished_and_the_next_run_completes_it(
+    settings: Settings, taxonomy: Taxonomy
+) -> None:
+    engine = create_memory_engine()
+    upgrade_database(engine)
+    factory = create_session_factory(engine)
+    with session_scope(factory) as session:
+        sync_taxonomy(session, taxonomy)
+        load_demo_dataset(session, generate_demo_dataset(DemoConfig(scale=0.2)))
+    total = _count(factory, SourceRecord)
+    assert total > 3 * BATCH  # enough records for the interruption to fall mid-run
+
+    def die_after_two_batches(done: int, _total: int) -> None:
+        if done >= 2 * BATCH:
+            raise Interrupted
+
+    with pytest.raises(Interrupted), session_scope(factory) as session:
+        normalize_records(
+            session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True,
+            progress=die_after_two_batches,
+        )  # fmt: skip
+
+    after_crash = _fingerprint(factory)
+    finished = after_crash["statuses"].get(ProcessingStatus.NORMALIZED.value, 0)
+    assert finished == 2 * BATCH  # the two finished batches survived the failure
+    assert after_crash["statuses"].get(ProcessingStatus.NEW.value, 0) == total - finished
+
+    with session_scope(factory) as session:  # the "next run": carries on, does not start over
+        summary = normalize_records(
+            session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True
+        )
+    assert summary.records_processed == total - finished
+
+    # and the end state is what one uninterrupted run gives
+    clean_engine = create_memory_engine()
+    upgrade_database(clean_engine)
+    clean = create_session_factory(clean_engine)
+    with session_scope(clean) as session:
+        sync_taxonomy(session, taxonomy)
+        load_demo_dataset(session, generate_demo_dataset(DemoConfig(scale=0.2)))
+    with session_scope(clean) as session:
+        normalize_records(session, settings, taxonomy, batch_size=BATCH)
+    assert _fingerprint(factory) == _fingerprint(clean)
+    engine.dispose()
+    clean_engine.dispose()
+
+
+def test_without_the_option_an_interruption_still_loses_everything(
+    settings: Settings, taxonomy: Taxonomy
+) -> None:
+    """The default is unchanged: the caller owns the transaction, so a failure rolls it all back."""
+    engine = create_memory_engine()
+    upgrade_database(engine)
+    factory = create_session_factory(engine)
+    with session_scope(factory) as session:
+        sync_taxonomy(session, taxonomy)
+        load_demo_dataset(session, generate_demo_dataset(DemoConfig(scale=0.2)))
+
+    def die(done: int, _total: int) -> None:
+        if done >= 2 * BATCH:
+            raise Interrupted
+
+    with pytest.raises(Interrupted), session_scope(factory) as session:
+        normalize_records(session, settings, taxonomy, batch_size=BATCH, progress=die)
+    assert _fingerprint(factory)["statuses"].get(ProcessingStatus.NORMALIZED.value, 0) == 0
+    engine.dispose()
+
+
+def test_committing_in_batches_does_not_keep_every_record_in_memory(
+    loaded: sessionmaker[Session], settings: Settings, taxonomy: Taxonomy
+) -> None:
+    with session_scope(loaded) as session:
+        normalize_records(session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True)
+        held = sum(1 for obj in session.identity_map.values() if isinstance(obj, SourceRecord))
+        total = session.scalar(select(func.count()).select_from(SourceRecord)) or 0
+    assert total > 3 * BATCH
+    assert held <= BATCH, f"{held} of {total} records were still held in memory"
+
+
+def test_names_added_by_the_resolver_are_still_saved_after_records_are_released(
+    loaded: sessionmaker[Session], settings: Settings, taxonomy: Taxonomy
+) -> None:
+    """Releasing records must not detach the organizations the resolver keeps updating."""
+    with session_scope(loaded) as session:
+        normalize_records(session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True)
+    with session_scope(loaded) as session:
+        mentions = session.execute(select(func.sum(OrganizationAlias.mention_count))).scalar() or 0
+    assert mentions > 0

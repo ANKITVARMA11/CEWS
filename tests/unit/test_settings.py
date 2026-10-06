@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from cews import settings as settings_module
-from cews.constants import CompetitorMode, DatabaseBackend, NormalizationMethod
+from cews.constants import DEFAULT_ENV_FILE, CompetitorMode, DatabaseBackend, NormalizationMethod
 from cews.settings import (
     Settings,
     SettingsError,
@@ -17,6 +17,7 @@ from cews.settings import (
     name_key,
     parse_competitor_list,
     resolve_competitor_mode,
+    resolve_env_file,
     validate_settings,
 )
 from support import REPO_ROOT, SCORING_FILE, TAXONOMY_FILE
@@ -511,3 +512,43 @@ def test_ollama_never_needs_an_api_key_warning() -> None:
 
 def test_shipped_config_files_exist() -> None:
     assert TAXONOMY_FILE.is_file() and SCORING_FILE.is_file()
+
+
+# --------------------------------------------------------------------------------------
+# resolve_env_file: one shared policy for "nothing was specified", used by the CLI and the
+# dashboard alike, so the two can never again silently disagree about what an empty value means
+# --------------------------------------------------------------------------------------
+def test_nothing_specified_resolves_to_the_default_env_file() -> None:
+    assert resolve_env_file(None) == DEFAULT_ENV_FILE
+    assert resolve_env_file("") == DEFAULT_ENV_FILE
+
+
+def test_a_real_path_is_returned_unchanged() -> None:
+    assert resolve_env_file("/tmp/custom.env") == "/tmp/custom.env"
+    custom = Path("/tmp/custom.env")
+    assert resolve_env_file(custom) == custom
+
+
+def test_resolving_nothing_behaves_exactly_like_omitting_the_argument(tmp_path: Path) -> None:
+    """The regression this guards: passing env_file=None explicitly to load_settings means
+    "skip dotenv files entirely" - a different, stricter thing than not passing it at all, which
+    tries the project's own .env. A caller that means "nothing was specified" must resolve to
+    the latter, not accidentally send the former."""
+    omitted = load_settings()
+    resolved = load_settings(env_file=resolve_env_file(None))
+    assert resolved.model_dump() == omitted.model_dump()
+
+
+def test_an_empty_box_still_picks_up_a_real_env_file(tmp_path: Path) -> None:
+    """A closer simulation of the dashboard's own bug: with DEFAULT_ENV_FILE pointed at a real
+    file (as it would be in production, pointed at the project root), an empty string - exactly
+    what a never-touched text box holds - must load it, not silently skip it."""
+    real_env = tmp_path / ".env"
+    real_env.write_text("LLM_PROVIDER=ollama\nLLM_MODEL=test-model\n", encoding="utf-8")
+    original = settings_module.DEFAULT_ENV_FILE
+    settings_module.DEFAULT_ENV_FILE = real_env
+    try:
+        settings = load_settings(env_file=resolve_env_file(""))
+    finally:
+        settings_module.DEFAULT_ENV_FILE = original
+    assert settings.llm_provider.value == "ollama" and settings.llm_model == "test-model"

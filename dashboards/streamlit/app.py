@@ -27,6 +27,12 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "src") not in sys.path:  # running through streamlit, not as an installed package
     sys.path.insert(0, str(ROOT / "src"))
+if str(Path(__file__).resolve().parent) not in sys.path:  # so "components" resolves explicitly,
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent)
+    )  # rather than relying on Streamlit's own path setup
+
+from components import chat_widget  # noqa: E402
 
 from cews.constants import EntityType, ScoreType  # noqa: E402
 from cews.dashboard import charts, queries  # noqa: E402
@@ -36,7 +42,8 @@ from cews.database.connection import (  # noqa: E402
     database_is_initialized,
     session_scope,
 )
-from cews.settings import SettingsError, load_settings  # noqa: E402
+from cews.logging_config import configure_logging  # noqa: E402
+from cews.settings import SettingsError, load_settings, resolve_env_file  # noqa: E402
 
 CONFIDENCE_THRESHOLD = 60.0
 PAGES = (
@@ -52,7 +59,13 @@ PAGES = (
 
 @st.cache_resource
 def _session_factory(env_file: str | None) -> Any:
-    settings = load_settings(env_file=env_file or None)
+    settings = load_settings(env_file=resolve_env_file(env_file))
+    # Unlike every `cews` command, which sets this up through cli.py's own _load(), nothing
+    # configures logging when the dashboard is launched directly with `streamlit run` - so
+    # without this call, every cews.* logger (the LLM client's request/response lines included)
+    # has no handler at all and is silently dropped, regardless of level. @st.cache_resource
+    # means this runs once per distinct env_file, not on every rerun.
+    configure_logging(settings)
     engine = create_db_engine(settings)
     return settings, create_session_factory(engine), database_is_initialized(engine)
 
@@ -500,6 +513,7 @@ def main() -> None:
         return
 
     _origin_banner()
+    chat_widget.render(env_file)
     {
         "Overview": page_overview,
         "Trends": page_trends,

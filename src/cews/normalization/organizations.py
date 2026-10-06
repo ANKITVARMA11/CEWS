@@ -415,7 +415,14 @@ def _looks_like_organization(text: str) -> bool:
     )
     if any(_contains(lowered, words) for words in groups):
         return True
-    return bool(normalize_organization_name(text).suffixes)
+    try:
+        return bool(normalize_organization_name(text).suffixes)
+    except ValueError:
+        # Free-text affiliations sometimes run two fields together with no comma between them,
+        # giving a "name" over MAX_ORG_NAME_LENGTH characters. That is not an organization name,
+        # so it is treated the same as any other fragment that does not look like one, rather
+        # than aborting the whole record the way an unhandled error here used to.
+        return False
 
 
 def split_affiliation(text: str) -> list[str]:

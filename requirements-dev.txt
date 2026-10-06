@@ -1,5 +1,6 @@
 # Development dependencies. Installs runtime dependencies too.
 -r requirements.txt
+-r requirements-mcp.txt
 pytest>=8.0,<10
 pytest-cov>=5.0,<8
 pytest-mock>=3.12,<4

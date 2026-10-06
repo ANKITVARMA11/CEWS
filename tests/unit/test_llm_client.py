@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from cews.ai.llm import LLMClient, LLMError, LLMResponse, llm_enabled
+from cews.ai.llm.client import NO_VISIBLE_ANSWER, _strip_reasoning
 from cews.settings import load_settings
 
 pytestmark = pytest.mark.unit
@@ -297,3 +298,161 @@ def test_no_schema_means_no_response_format_field() -> None:
     with client:
         client.complete("x")
     assert "response_format" not in captured
+
+
+# --------------------------------------------------------------------------------------
+# Stripping a reasoning model's chain-of-thought
+#
+# Some models - reasoning-tuned ones served through providers such as NVIDIA NIM are the case
+# actually seen - write their scratch thinking directly into the response, wrapped in
+# <think>...</think>, instead of returning it in a separate field. Confirmed against a real reply
+# from a real model: left unstripped, that scratchpad is exactly what a person sees as "the
+# answer" instead of the answer itself.
+# --------------------------------------------------------------------------------------
+def think_handler(content: str) -> Any:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    return handler
+
+
+def test_strip_reasoning_removes_a_closed_think_block() -> None:
+    assert (
+        _strip_reasoning("<think>scratch work here</think>The answer is 42.") == "The answer is 42."
+    )
+
+
+def test_strip_reasoning_is_case_insensitive_and_spans_lines() -> None:
+    text = "<THINK>\nline one\nline two\n</THINK>\nFinal answer."
+    assert _strip_reasoning(text) == "Final answer."
+
+
+def test_strip_reasoning_drops_everything_after_an_unclosed_tag() -> None:
+    result = _strip_reasoning("Some real prefix<think>reasoning that never closes and runs on")
+    assert result == "Some real prefix"
+
+
+def test_strip_reasoning_reports_when_nothing_but_reasoning_came_back() -> None:
+    assert _strip_reasoning("<think>only reasoning, cut off before any answer") == NO_VISIBLE_ANSWER
+    assert _strip_reasoning("<think>only reasoning, fully closed</think>") == NO_VISIBLE_ANSWER
+
+
+def test_strip_reasoning_leaves_ordinary_text_alone() -> None:
+    assert _strip_reasoning("A perfectly normal answer with no reasoning at all.") == (
+        "A perfectly normal answer with no reasoning at all."
+    )
+
+
+def test_complete_strips_reasoning_from_a_real_looking_reasoning_model_reply() -> None:
+    scripted = (
+        "<think>We need to answer: the user asked X. Let's check the facts... "
+        "Thus the answer is Y.</think>The answer is Y."
+    )
+    client = client_for({"llm_provider": "ollama"}, handler=think_handler(scripted))
+    with client:
+        response = client.complete("what is the answer?")
+    assert response.text == "The answer is Y."
+    assert "We need to answer" not in response.text
+
+
+def test_chat_strips_reasoning_from_a_final_answer() -> None:
+    scripted = (
+        "<think>Filter the list, sort by score...</think>Pfizer and AbbVie have the lowest scores."
+    )
+    client = client_for({"llm_provider": "ollama"}, handler=think_handler(scripted))
+    with client:
+        response = client.chat([{"role": "user", "content": "who has the lowest score?"}])
+    assert response.text == "Pfizer and AbbVie have the lowest scores."
+    assert "Filter the list" not in response.text
+
+
+def test_chat_does_not_touch_reasoning_on_a_tool_calling_turn() -> None:
+    """The assistant's own prior turn is fed back to it verbatim on the next call - a genuine
+    tool-calling protocol requirement - so reasoning text alongside a tool call is left alone."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "<think>I should check the overview first.</think>",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "get_overview", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = client_for({"llm_provider": "ollama"}, handler=handler)
+    with client:
+        response = client.chat([{"role": "user", "content": "q"}], tools=[{"type": "function"}])
+    assert response.wants_tools is True
+    assert "I should check the overview first." in response.text
+
+
+# --------------------------------------------------------------------------------------
+# Visibility: a request going out is logged, without leaking message content
+# --------------------------------------------------------------------------------------
+def test_a_request_and_response_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    client = client_for({"llm_provider": "ollama"})
+    with caplog.at_level(logging.INFO, logger="cews.ai.llm.client"), client:
+        client.complete("a private prompt that must not appear in the log")
+    text = caplog.text
+    assert "LLM request" in text and "LLM response" in text
+    assert "a private prompt that must not appear in the log" not in text
+
+
+def test_a_tool_calling_response_names_the_tools_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "list_trends", "arguments": "{}"},
+                                },
+                                {
+                                    "id": "c2",
+                                    "type": "function",
+                                    "function": {"name": "get_overview", "arguments": "{}"},
+                                },
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = client_for({"llm_provider": "ollama"}, handler=handler)
+    with caplog.at_level(logging.INFO, logger="cews.ai.llm.client"), client:
+        client.chat([{"role": "user", "content": "q"}], tools=[{"type": "function"}])
+    assert "requested tool call(s): list_trends, get_overview" in caplog.text
+
+
+def test_the_api_key_is_never_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    client = client_for({"llm_provider": "openai_compatible", "llm_api_key": "sk-super-secret"})
+    with caplog.at_level(logging.INFO, logger="cews.ai.llm.client"), client:
+        client.complete("prompt")
+    assert "sk-super-secret" not in caplog.text

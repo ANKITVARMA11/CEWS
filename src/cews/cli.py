@@ -67,6 +67,7 @@ from cews.settings import (
     SettingsError,
     load_settings,
     resolve_competitor_mode,
+    resolve_env_file,
     validate_settings,
 )
 
@@ -77,7 +78,7 @@ MIN_PYTHON = (3, 11)
 
 
 def _load(args: argparse.Namespace) -> Settings:
-    settings = load_settings(env_file=args.env_file) if args.env_file else load_settings()
+    settings = load_settings(env_file=resolve_env_file(args.env_file))
     configure_logging(settings)
     if not args.verbose:
         for handler in logging.getLogger("cews").handlers:
@@ -327,15 +328,31 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if not database_is_initialized(engine):
         print("database not initialized; run db-init first")
         return EXIT_FAILURE
+    from cews.scheduler.job_state import (
+        REFRESH_JOB,
+        REFRESH_LOCK,
+        JobAlreadyRunningError,
+        job_lock,
+        lock_directory,
+        mark_interrupted_runs,
+    )
+
+    factory = create_session_factory(engine)
     try:
-        report = fetch_all_enabled_sources(
-            settings,
-            create_session_factory(engine),
-            sources=args.source or None,
-            mode="full" if args.full else "auto",
-            dry_run=args.dry_run,
-            allow_mixed=args.allow_mixed,
-        )
+        # The same lock a refresh cycle takes: a fetch typed by hand must not run beside one.
+        with job_lock(lock_directory(settings), REFRESH_LOCK):
+            mark_interrupted_runs(factory, (REFRESH_JOB, "fetch"))
+            report = fetch_all_enabled_sources(
+                settings,
+                factory,
+                sources=args.source or None,
+                mode="full" if args.full else "auto",
+                dry_run=args.dry_run,
+                allow_mixed=args.allow_mixed,
+            )
+    except JobAlreadyRunningError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
     except MixedDataError as exc:
         print(f"error: {exc}")
         return EXIT_FAILURE
@@ -387,6 +404,7 @@ def cmd_normalize(args: argparse.Namespace) -> int:
             reprocess=args.reprocess,
             deduplicate=not args.no_dedupe,
             progress=progress,
+            commit_each_batch=True,  # an interrupted run resumes instead of starting over
         )
     print("\r" + " " * 40)
     print(f"normalized {summary.records_processed} record(s)")
@@ -932,6 +950,623 @@ def cmd_competitors(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_insights(args: argparse.Namespace) -> int:
+    """Run the five deterministic insight rules against the most recent scores."""
+    from cews.insights.rule_engine import generate_insights
+    from cews.scoring.config import ScoringConfigError
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    score_date = _parse_as_of(args.as_of)
+    factory = create_session_factory(engine)
+    with session_scope(factory) as session:
+        synthetic = count_records_by_origin(session)["synthetic"] > 0
+        try:
+            run = generate_insights(
+                session,
+                settings,
+                score_date=score_date.date() if score_date else None,
+                store=not args.no_store,
+                is_synthetic=synthetic,
+            )
+        except ScoringConfigError as exc:
+            print(f"scoring configuration problem: {exc}")
+            return EXIT_CONFIG
+        from cews.database.models import Insight
+
+        stored_rows = (
+            list(
+                session.scalars(
+                    select(Insight)
+                    .where(Insight.insight_date == run.insight_date)
+                    .order_by(Insight.severity.desc(), Insight.insight_type)
+                )
+            )
+            if not args.no_store
+            else []
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "run": run.as_dict(),
+                    "insights": [
+                        {
+                            "id": row.id,
+                            "type": row.insight_type,
+                            "severity": row.severity,
+                            "title": row.title,
+                            "observed_fact": row.observed_fact,
+                            "interpretation": row.interpretation,
+                            "recommended_review": row.recommended_review,
+                            "confidence": row.confidence_score,
+                        }
+                        for row in stored_rows
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    if run.warnings:
+        for warning in run.warnings:
+            print(f"note: {warning}")
+        if run.candidates_found == 0:
+            return EXIT_OK
+    elif run.candidates_found == 0:
+        print(f"no insight found for {run.insight_date}")
+        return EXIT_OK
+    print(
+        f"insights for {run.insight_date}: {run.candidates_found} found, {run.stored} stored, "
+        f"{run.duplicates_suppressed} already known"
+    )
+    if run.rejected_no_evidence:
+        print(f"  dropped without evidence: {run.rejected_no_evidence}")
+    if args.no_store:
+        return EXIT_OK
+    for row in stored_rows[: args.top]:
+        print(f"\n[{row.severity}] {row.title}")
+        print(f"    fact      : {row.observed_fact}")
+        print(f"    means     : {row.interpretation}")
+        print(f"    do next   : {row.recommended_review}")
+    return EXIT_OK
+
+
+def _print_evaluation(report: Any) -> None:
+    """A short human summary, under the three headings the evidence must stay apart under."""
+    data = report.as_dict()
+    print(
+        f"evaluation {data['evaluation_id']}"
+        + ("  [synthetic demo data]" if data["is_synthetic"] else "")
+    )
+
+    algorithm = data["algorithm"]
+    print("\nALGORITHM  (what the system says about itself; not checked against outside truth)")
+    if "data_quality" in algorithm:
+        failed = algorithm["data_quality"]["failed"]
+        total_checks = len(algorithm["data_quality"]["checks"])
+        print(
+            f"  data quality : {total_checks - len(failed)}/{total_checks} checks passed"
+            + (f"; failed: {', '.join(failed)}" if failed else "")
+        )
+    if "forecast" in algorithm:
+        forecast = algorithm["forecast"]
+        print(
+            f"  forecasts    : {forecast['entities']} entities, median MASE {forecast['median_mase']}"
+        )
+    if "robustness" in algorithm:
+        checks = [
+            c
+            for c in algorithm["robustness"]["checks"]
+            if c["dimension"] != "low_sample_confidence"
+        ]
+        if checks:
+            worst = min(checks, key=lambda c: c["stability"]["spearman"]["coefficient"] or 0.0)
+            print(
+                f"  robustness   : {len(checks)} perturbations; least stable is {worst['dimension']} "
+                f"(rank correlation {worst['stability']['spearman']['coefficient']}, "
+                f"top-{worst['stability']['k']} overlap {worst['stability']['top_k_overlap']})"
+            )
+
+    backtest = data["backtest"]
+    print("\nBACKTEST  (would the ranking have predicted what actually grew?)")
+    if "backtest" in backtest:
+        b = backtest["backtest"]
+        print(
+            f"  {b['folds']} folds, {b['horizon_months']}-month horizon: precision@{b['k']} "
+            f"{b['mean_precision_at_k']}, recall@{b['k']} {b['mean_recall_at_k']}, "
+            f"NDCG {b['mean_ndcg_at_k']}, rank correlation {b['mean_spearman']}"
+        )
+        for warning in b["warnings"][:3]:
+            print(f"  note: {warning}")
+    for item in backtest.get("benchmarks", {}).get("benchmarks", []):
+        where = (
+            f"mean rank {item['mean_rank']} (percentile {item['mean_percentile']})"
+            if item["mean_rank"] is not None
+            else item["note"]
+        )
+        print(f"  benchmark {item['name']:<28} {where}")
+
+    expert = data["expert_validation"]
+    print("\nEXPERT VALIDATION  (what people made of it)")
+    if "alerts" in expert:
+        a = expert["alerts"]
+        print(
+            f"  alerts       : {a['reviewed']}/{a['insights_total']} reviewed; precision {a['precision']}, "
+            f"acceptance {a['acceptance_rate']}, duplicates {a['duplicate_rate']}, "
+            f"median lead time {a['median_lead_days']} days"
+        )
+    if "ai_ablation" in expert:
+        ablation = expert["ai_ablation"]
+        announcements = ablation.get("announcement_extraction")
+        if announcements:
+            parts = [
+                (
+                    f"{m['method']} {m['accuracy']}"
+                    if m["accuracy"] is not None
+                    else f"{m['method']} n/a"
+                )
+                for m in announcements["methods"]
+            ]
+            print(
+                f"  announcements: accuracy on {announcements['labelled_count']} labelled: "
+                + ", ".join(parts)
+            )
+        topics = ablation.get("topic_discovery")
+        if topics:
+            print(
+                f"  topic discovery: {topics['novel_clusters_with_discovery']} novel cluster(s), precision {topics['precision']}"
+            )
+        print(f"  org matching : {ablation['org_matching']}")
+    if "expert_sheet" in expert:
+        e = expert["expert_sheet"]
+        print(
+            f"  expert sheet : {e['rated']}/{e['rows']} rated; precision@{e['k']} {e['precision_at_k']}"
+        )
+
+    if data["errors"]:
+        print("\ncould not run:")
+        for name, reason in data["errors"].items():
+            print(f"  {name}: {reason}")
+
+
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    """Run the evaluation suite and print it under algorithm / backtest / expert headings."""
+    from cews.ai.llm import LLMClient, llm_enabled
+    from cews.validation.evaluation_report import run_evaluation
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    as_of = _parse_as_of(args.as_of)
+    factory = create_session_factory(engine)
+    client = LLMClient(settings) if llm_enabled(settings) else None
+    try:
+        with session_scope(factory) as session:
+            try:
+                report = run_evaluation(
+                    session,
+                    settings,
+                    sections=tuple(args.only) if args.only else None,
+                    as_of=as_of,
+                    horizon_months=args.horizon,
+                    k=args.k,
+                    cleanup_backtest=not args.keep_backtest_rows,
+                    llm_client=client,
+                    expert_file=Path(args.expert_file) if args.expert_file else None,
+                    store=not args.no_store,
+                )
+            except ScoringConfigError as exc:
+                print(f"scoring configuration problem: {exc}")
+                return EXIT_CONFIG
+            except ValueError as exc:
+                print(f"error: {exc}")
+                return EXIT_FAILURE
+    finally:
+        if client is not None:
+            client.close()
+
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2, default=str))
+    else:
+        _print_evaluation(report)
+    return EXIT_OK
+
+
+def cmd_alerts(args: argparse.Namespace) -> int:
+    """List insights with their latest expert rating, or record a rating."""
+    from cews.database.models import Insight
+    from cews.validation.alert_metrics import AlertReviewError, latest_reviews, record_alert_review
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    factory = create_session_factory(engine)
+
+    if args.action == "rate":
+        if args.item_id is None or not args.rating:
+            print("usage: cews alerts rate <insight-id> <rating>  (see: cews alerts)")
+            return EXIT_FAILURE
+        with session_scope(factory) as session:
+            try:
+                review = record_alert_review(
+                    session, args.item_id, args.rating, reviewer=args.reviewer, comment=args.comment
+                )
+            except AlertReviewError as exc:
+                print(f"error: {exc}")
+                return EXIT_FAILURE
+            print(f"[{review.insight_id}] rated {review.rating}")
+        return EXIT_OK
+
+    with session_scope(factory) as session:
+        insights = list(
+            session.scalars(
+                select(Insight).order_by(Insight.insight_date.desc(), Insight.id).limit(args.limit)
+            )
+        )
+        if not insights:
+            print("no insights yet; run: cews insights")
+            return EXIT_OK
+        reviews = latest_reviews(session)
+        print(f"{len(insights)} insight(s); rate with: cews alerts rate <id> <rating>\n")
+        for insight in insights:
+            latest = reviews.get(insight.id)
+            rated = latest.rating if latest else "-"
+            print(f"[{insight.id:>4}] {rated:<21} {insight.insight_type:<20} {insight.title}")
+        print(
+            "\nratings: relevant, not_relevant, duplicate, too_late, insufficient_evidence, needs_investigation"
+        )
+    return EXIT_OK
+
+
+def cmd_expert_export(args: argparse.Namespace) -> int:
+    """Write a sheet of scored topics for an expert to rate."""
+    from cews.validation.expert_review import export_expert_review
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    factory = create_session_factory(engine)
+    with session_scope(factory) as session:
+        written = export_expert_review(session, Path(args.out), limit=args.limit)
+    if written == 0:
+        print("no scores stored yet; run: cews score")
+        return EXIT_OK
+    print(f"wrote {written} topic(s) to {args.out}")
+    print("fill in the expert_rating and expert_comment columns, then check it with:")
+    print(f"  cews evaluate --only expert_sheet --expert-file {args.out}")
+    return EXIT_OK
+
+
+def cmd_mcp_serve(args: argparse.Namespace) -> int:
+    """Run the read-only MCP server on stdio, for an MCP client to launch."""
+    import sys
+
+    settings = _load(args)
+    # The stdio transport speaks its protocol on stdout, so nothing else may write there: move
+    # every console log handler to stderr before anything can log.
+    for name in ("", "cews"):
+        for handler in logging.getLogger(name).handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(
+                handler, logging.FileHandler
+            ):
+                handler.setStream(sys.stderr)
+
+    try:
+        from cews.database.connection import DatabaseError, create_read_only_engine
+        from cews.mcp_server.server import build_server
+    except ImportError:
+        print(
+            "the MCP server needs the 'mcp' package: python -m pip install -r requirements-mcp.txt",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+    try:
+        engine = create_read_only_engine(settings)
+    except DatabaseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first", file=sys.stderr)
+        return EXIT_FAILURE
+    server = build_server(settings, create_session_factory(engine))
+    print("CEWS MCP server ready (read-only, stdio)", file=sys.stderr)
+    server.run(transport="stdio")
+    return EXIT_OK
+
+
+def cmd_export_powerbi(args: argparse.Namespace) -> int:
+    """Write the star-schema CSV files that Power BI Desktop loads."""
+    from cews.database.connection import DatabaseError, create_read_only_engine
+    from cews.exports.csv_export import ExportError
+    from cews.exports.powerbi_export import export_powerbi
+
+    settings = _load(args)
+    try:
+        engine = create_read_only_engine(settings)  # an export only reads; it cannot write
+    except DatabaseError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    target = Path(args.out) if args.out else settings.export_directory / "powerbi"
+    factory = create_session_factory(engine)
+    try:
+        with session_scope(factory) as session:
+            result = export_powerbi(session, target)
+    except (ExportError, OSError) as exc:
+        print(f"export failed: {exc}")
+        return EXIT_FAILURE
+
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2))
+        return EXIT_OK
+    print(f"wrote {len(result.row_counts)} tables to {result.output_directory}")
+    for name, count in result.row_counts.items():
+        print(f"  {name:<24}{count:>8} row(s)")
+    print(f"\n{result.data_origin}")
+    print(
+        "open Power BI Desktop > Get data > Folder, and follow dashboards/powerbi/refresh_instructions.md"
+    )
+    return EXIT_OK
+
+
+def _print_refresh(report: Any) -> None:
+    title = "Refresh (dry run, nothing written)" if report.dry_run else "Refresh"
+    print(f"{title} {report.job_id[:8]} [{report.trigger}]: {report.status.value}")
+    if report.fetch is not None:
+        totals = report.fetch["totals"]
+        print(
+            f"  fetch        {report.fetch['status']:<10} {totals.get('records_received', 0)} received, "
+            f"{totals.get('records_inserted', 0)} new, {totals.get('records_updated', 0)} updated"
+        )
+        for source, status in sorted(report.fetch["sources"].items()):
+            print(f"    {source:<22}{status}")
+    for step in report.steps:
+        note = f"  ! {step.error}" if step.error else ""
+        print(f"  {step.name:<12} {step.status:<10} {step.seconds:>6.1f}s{note}")
+    if report.error:
+        print(f"\n{report.error}")
+
+
+def cmd_refresh(args: argparse.Namespace) -> int:
+    """Run one refresh cycle now: fetch every enabled source, then re-run the analysis."""
+    from cews.scheduler.job_state import JobAlreadyRunningError
+    from cews.scheduler.jobs import default_analysis_steps, run_refresh
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    factory = create_session_factory(engine)
+    steps = None
+    if args.no_export:
+        steps = [step for step in default_analysis_steps(settings) if step[0] != "export"]
+    try:
+        report = run_refresh(
+            factory,
+            settings,
+            trigger="manual",
+            dry_run=args.dry_run,
+            sources=args.source or None,
+            skip_fetch=args.skip_fetch,
+            skip_analysis=args.skip_analysis,
+            allow_mixed=args.allow_mixed,
+            analysis_steps=steps,
+        )
+    except JobAlreadyRunningError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2, default=str))
+    else:
+        _print_refresh(report)
+    return EXIT_OK if report.status.value in ("succeeded", "skipped") else EXIT_FAILURE
+
+
+def cmd_run_scheduler(args: argparse.Namespace) -> int:
+    """Run refresh cycles on an interval until stopped with Ctrl+C."""
+    from cews.scheduler.scheduler import SchedulerDisabledError, run_scheduler
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    interval = settings.fetch_interval_minutes
+    first = (
+        "immediately" if (args.now or settings.run_fetch_on_startup) else f"in {interval} minute(s)"
+    )
+    print(
+        f"scheduler running: a refresh every {interval} minute(s), the first {first}. Ctrl+C to stop."
+    )
+    print("progress is written to the log; see 'cews jobs' for results.")
+    print("Ctrl+C lets a running cycle finish; Ctrl+C twice aborts it.")
+    try:
+        run_scheduler(settings, create_session_factory(engine), run_now=True if args.now else None)
+    except SchedulerDisabledError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    print("scheduler stopped")
+    return EXIT_OK
+
+
+def cmd_jobs(args: argparse.Namespace) -> int:
+    """Show whether a refresh is running, when one last succeeded, and recent runs."""
+    from cews.scheduler.job_state import (
+        REFRESH_JOB,
+        REFRESH_LOCK,
+        consecutive_failures,
+        last_success,
+        lock_directory,
+        lock_status,
+        recent_job_runs,
+    )
+
+    settings = _load(args)
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+    factory = create_session_factory(engine)
+    now = datetime.now(UTC)
+    holder = lock_status(lock_directory(settings), REFRESH_LOCK)
+    with session_scope(factory) as session:
+        success = last_success(session, REFRESH_JOB)
+        failures = consecutive_failures(session, REFRESH_JOB)
+        runs = recent_job_runs(session, limit=args.limit)
+        success_at = success.started_at if success else None
+        # A row still saying "running" when no process actually holds the lock (holder is None)
+        # is unambiguously stale: whatever ran it died without a chance to update its own row,
+        # and the row will be properly marked "interrupted" the next time a cycle starts (see
+        # mark_interrupted_runs) - but that could be hours or days away, and until then this is
+        # the only thing that would otherwise make a long-dead run look like it is still going.
+        # Flagged here from data already fetched, with no extra lock check and no database
+        # write: `cews jobs` stays a pure read.
+        rows: list[dict[str, Any]] = [
+            {
+                "job": run.job_name,
+                "status": run.status,
+                "trigger": run.trigger,
+                "dry_run": run.dry_run,
+                "started_at": run.started_at.isoformat(),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error": run.error_summary,
+                "stale": run.status == "running" and holder is None,
+            }
+            for run in runs
+        ]
+    age = (now - success_at).total_seconds() / 60 if success_at else None
+    interval = settings.fetch_interval_minutes
+    overdue = age is not None and age > 2 * interval
+    payload = {
+        "scheduler_enabled": settings.enable_scheduler,
+        "interval_minutes": interval,
+        "running": holder is not None,
+        "lock": holder,
+        "last_success": success_at.isoformat() if success_at else None,
+        "minutes_since_last_success": None if age is None else round(age, 1),
+        "consecutive_failures": failures,
+        "overdue": overdue,
+        "recent_runs": rows,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return EXIT_OK
+
+    print(
+        f"scheduler   : {'enabled' if settings.enable_scheduler else 'DISABLED'}, every {interval} minute(s)"
+    )
+    print(f"running now : {'yes' if holder else 'no'}")
+    if success_at is None:
+        print("last success: never (run: cews refresh)")
+    else:
+        print(f"last success: {success_at:%Y-%m-%d %H:%M} UTC ({age:.0f} minute(s) ago)")
+    if failures:
+        print(f"failing     : the last {failures} refresh(es) failed")
+    if overdue:
+        print("WARNING     : no success for over twice the interval; is the scheduler running?")
+    if any(row["stale"] for row in rows):
+        print(
+            "note        : row(s) below marked 'running' are stale; run `cews refresh` to clear them"
+        )
+    if rows:
+        print(f"\n{'started (UTC)':<18}{'job':<9}{'trigger':<10}{'status':<11}note")
+        print("-" * 70)
+        for row in rows:
+            if row["stale"]:
+                note = "stale: process ended without finishing (not actually running)"
+            elif row["dry_run"]:
+                note = "dry run"
+            else:
+                note = row["error"] or ""
+            print(
+                f"{row['started_at'][:16].replace('T', ' '):<18}{row['job']:<9}{row['trigger']:<10}{row['status']:<11}{note[:55]}"
+            )
+    return EXIT_OK
+
+
+def _print_agent_reply(reply: Any, persona_name: str) -> None:
+    from cews.agents.core import format_tool_call
+
+    print(f"[{persona_name}]\n{reply.text}")
+    if reply.tool_calls:
+        print("\nchecked:")
+        for call in reply.tool_calls:
+            print(f"  {format_tool_call(call)}")
+    if reply.stopped_early:
+        print("\n(stopped early: hit the tool-call limit before reaching a final answer)")
+
+
+def cmd_agent(args: argparse.Namespace) -> int:
+    """Ask an agent a question, verify an insight, or draft the weekly briefing.
+
+    Launches a real MCP connection (the same server `cews mcp-serve` runs) for this one
+    question, then closes it; use the dashboard's chat widget instead for a conversation with
+    several questions in a row, which keeps that connection open across all of them.
+    """
+    from cews.agents.personas import ANALYST, BRIEFING_WRITER, FACT_CHECKER
+    from cews.agents.session import AgentRuntime, RuntimeNotReadyError
+    from cews.ai.llm import LLMError, llm_enabled
+
+    settings = _load(args)
+    if not llm_enabled(settings):
+        print("no LLM is configured (LLM_PROVIDER=none); set LLM_PROVIDER and LLM_MODEL in .env")
+        return EXIT_FAILURE
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+
+    if args.action == "verify":
+        if args.arg is None:
+            print("usage: cews agent verify <insight-id>")
+            return EXIT_FAILURE
+        persona, message = FACT_CHECKER, f"Check insight id {args.arg}."
+    elif args.action == "brief":
+        persona, message = BRIEFING_WRITER, "Write this week's briefing."
+    else:
+        if not args.arg:
+            print('usage: cews agent ask "<question>"')
+            return EXIT_FAILURE
+        persona, message = ANALYST, args.arg
+
+    runtime = AgentRuntime(settings, env_file=args.env_file)
+    try:
+        runtime.start(timeout=60)
+        reply = runtime.ask(persona, message, timeout=120)
+    except RuntimeNotReadyError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    except TimeoutError:
+        print("error: the agent did not answer in time")
+        return EXIT_FAILURE
+    except LLMError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    finally:
+        runtime.stop()
+
+    if args.json:
+        print(json.dumps(reply.as_dict(), indent=2))
+    else:
+        _print_agent_reply(reply, persona.name)
+    return EXIT_OK
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """List review items, or approve/reject one by id."""
     from cews.normalization.review_actions import (
@@ -1177,6 +1812,117 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print full detail as JSON"
     )
     extract_announcements.set_defaults(func=cmd_extract_announcements)
+
+    insights = sub.add_parser(
+        "insights", parents=[common], help="turn scores into plain-language findings"
+    )
+    insights.add_argument("--as-of", help="use scores on or before this date (YYYY-MM-DD)")
+    insights.add_argument("--top", type=int, default=15, help="how many to show (default 15)")
+    insights.add_argument("--no-store", action="store_true", help="find without saving")
+    insights.add_argument("--json", action="store_true", help="print full detail as JSON")
+    insights.set_defaults(func=cmd_insights)
+
+    evaluate = sub.add_parser(
+        "evaluate",
+        parents=[common],
+        help="evaluate the system: data quality, backtest, robustness, alerts, AI layers",
+    )
+    evaluate.add_argument("--only", nargs="+", metavar="SECTION", help="run only these sections")
+    evaluate.add_argument("--as-of", help="evaluate as of this date (YYYY-MM-DD, default: today)")
+    evaluate.add_argument("--horizon", type=int, default=3, help="backtest look-ahead in months")
+    evaluate.add_argument("--k", type=int, default=5, help="Precision@K cutoff for the backtest")
+    evaluate.add_argument(
+        "--keep-backtest-rows",
+        action="store_true",
+        help="leave the historical feature/score rows the backtest writes (default: remove them)",
+    )
+    evaluate.add_argument("--expert-file", help="a completed expert review sheet to summarize")
+    evaluate.add_argument("--no-store", action="store_true", help="do not save the results")
+    evaluate.add_argument("--json", action="store_true", help="print the full result as JSON")
+    evaluate.set_defaults(func=cmd_evaluate)
+
+    alerts = sub.add_parser(
+        "alerts", parents=[common], help="list insights with expert ratings, or rate one"
+    )
+    alerts.add_argument("action", nargs="?", default="list", choices=("list", "rate"))
+    alerts.add_argument("item_id", nargs="?", type=int, help="insight id, for rate")
+    alerts.add_argument("rating", nargs="?", help="the rating, for rate")
+    alerts.add_argument("--reviewer", help="who is rating")
+    alerts.add_argument("--comment", help="an optional comment")
+    alerts.add_argument("--limit", type=int, default=30, help="how many insights to list")
+    alerts.set_defaults(func=cmd_alerts)
+
+    expert_export = sub.add_parser(
+        "expert-export", parents=[common], help="write a topic sheet for an expert to rate"
+    )
+    expert_export.add_argument("--out", required=True, help="CSV file to write")
+    expert_export.add_argument("--limit", type=int, help="export only the top N topics")
+    expert_export.set_defaults(func=cmd_expert_export)
+
+    mcp_serve = sub.add_parser(
+        "mcp-serve",
+        parents=[common],
+        help="run the read-only MCP server (stdio) for an MCP client to launch",
+    )
+    mcp_serve.set_defaults(func=cmd_mcp_serve)
+
+    export_powerbi_parser = sub.add_parser(
+        "export-powerbi",
+        parents=[common],
+        help="write star-schema CSV files for Power BI Desktop",
+    )
+    export_powerbi_parser.add_argument(
+        "--out", help="output folder (default: <export directory>/powerbi)"
+    )
+    export_powerbi_parser.add_argument("--json", action="store_true", help="print a JSON summary")
+    export_powerbi_parser.set_defaults(func=cmd_export_powerbi)
+
+    refresh = sub.add_parser(
+        "refresh",
+        parents=[common],
+        help="run one refresh cycle now: fetch every enabled source, then re-run the analysis",
+    )
+    refresh.add_argument("--source", action="append", help="fetch only this source id (repeatable)")
+    refresh.add_argument(
+        "--dry-run", action="store_true", help="fetch without writing; skip analysis"
+    )
+    refresh.add_argument("--skip-fetch", action="store_true", help="only re-run the analysis")
+    refresh.add_argument("--skip-analysis", action="store_true", help="only fetch")
+    refresh.add_argument("--no-export", action="store_true", help="skip the Power BI export step")
+    refresh.add_argument(
+        "--allow-mixed", action="store_true", help="allow live data in a demo database"
+    )
+    refresh.add_argument("--json", action="store_true", help="print the full result as JSON")
+    refresh.set_defaults(func=cmd_refresh)
+
+    run_scheduler_parser = sub.add_parser(
+        "run-scheduler",
+        parents=[common],
+        help="run refresh cycles every FETCH_INTERVAL_MINUTES until stopped (Ctrl+C)",
+    )
+    run_scheduler_parser.add_argument(
+        "--now",
+        action="store_true",
+        help="run the first cycle immediately instead of after one interval",
+    )
+    run_scheduler_parser.set_defaults(func=cmd_run_scheduler)
+
+    jobs = sub.add_parser(
+        "jobs", parents=[common], help="show whether a refresh is running and recent runs"
+    )
+    jobs.add_argument("--limit", type=int, default=8, help="how many recent runs to show")
+    jobs.add_argument("--json", action="store_true", help="print as JSON")
+    jobs.set_defaults(func=cmd_jobs)
+
+    agent = sub.add_parser(
+        "agent",
+        parents=[common],
+        help="ask an agent a question, verify an insight, or draft the weekly briefing",
+    )
+    agent.add_argument("action", nargs="?", default="ask", choices=("ask", "verify", "brief"))
+    agent.add_argument("arg", nargs="?", help="the question (ask) or insight id (verify)")
+    agent.add_argument("--json", action="store_true", help="print the full result as JSON")
+    agent.set_defaults(func=cmd_agent)
 
     review = sub.add_parser(
         "review", parents=[common], help="show, approve or reject items awaiting human review"

@@ -68,6 +68,28 @@ def test_score_matches_a_hand_calculation(config: ScoringConfig) -> None:
     assert sum(part.contribution for part in result.components.values()) == pytest.approx(60.0)
 
 
+@pytest.mark.parametrize(
+    ("strength", "expected"),
+    [
+        (10.0, "Limited recent innovation"),
+        (50.0, "Moderate innovation activity"),
+        (70.0, "Strong innovation activity"),
+        (95.0, "Innovation leader"),
+    ],
+)
+def test_the_configured_label_is_applied(
+    config: ScoringConfig, strength: float, expected: str
+) -> None:
+    """Regression: innovation scores were the only kind that never received their label."""
+    result = calculate_innovation_score(
+        make_inputs(patent=strength, trial=strength, publication=strength, funding=strength),
+        config,
+        confidence=90.0,
+        available_sources=ALL_SOURCES,
+    )
+    assert result.category == expected
+
+
 def test_patents_carry_the_most_weight(config: ScoringConfig) -> None:
     result = calculate_innovation_score(
         make_inputs(), config, confidence=90.0, available_sources=ALL_SOURCES

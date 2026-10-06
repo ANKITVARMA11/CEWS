@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cews.constants import EntityType, ScoreType
-from cews.scoring.base import ScoreResult, combine
+from cews.scoring.base import ScoreResult, apply_categories, combine
 from cews.scoring.config import ScoringConfig
 from cews.scoring.inputs import EntityInputs
 
@@ -90,7 +90,7 @@ def calculate_innovation_score(
         change = value - previous_value
         direction = "up" if change > 0 else "down" if change < 0 else "unchanged"
         notes.append(f"Innovation is {direction} {abs(change):.1f} points since the previous run.")
-    return ScoreResult(
+    result = ScoreResult(
         score_type=ScoreType.INNOVATION.value,
         entity_type=EntityType.COMPETITOR.value,
         entity_id=inputs.entity_id,
@@ -103,6 +103,7 @@ def calculate_innovation_score(
         notes=notes,
         scoring_version=config.version,
     )
+    return apply_categories(result, config)
 
 
 def _ranks(values: Mapping[int, float]) -> dict[int, int]:

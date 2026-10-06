@@ -76,6 +76,24 @@ class AnnouncementType(StrEnum):
     OTHER = "other"
 
 
+class InsightType(StrEnum):
+    """The five deterministic insight templates. No LLM is involved in generating any of them."""
+
+    EMERGING_TREND = "emerging_trend"
+    COMPETITOR_MOVEMENT = "competitor_movement"
+    NEW_MARKET_ENTRY = "new_market_entry"
+    PATENT_SURGE = "patent_surge"
+    OPPORTUNITY = "opportunity"
+
+
+class InsightSeverity(StrEnum):
+    """How prominently an insight should be shown. Never alarmist wording."""
+
+    INFO = "info"
+    WATCH = "watch"
+    HIGH = "high"
+
+
 class SourceType(StrEnum):
     """Kinds of records CEWS collects (also used as ``record_type``)."""
 

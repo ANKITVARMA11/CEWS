@@ -67,6 +67,8 @@ _PATH_FIELDS: tuple[str, ...] = (
     "scoring_config_file",
     "export_directory",
     "competitor_config_file",
+    "benchmark_topics_file",
+    "announcement_labels_file",
 )
 _LEGAL_SUFFIXES = frozenset(
     {
@@ -143,6 +145,10 @@ class Settings(BaseSettings):
     )
     topic_taxonomy_file: Path = Path("./config/topic_taxonomy.yaml")
 
+    # Evaluation inputs (read only by `cews evaluate`; a missing file only skips that section)
+    benchmark_topics_file: Path = Path("./config/benchmark_topics.yaml")
+    announcement_labels_file: Path = Path("./config/announcement_eval_labels.yaml")
+
     # Sources
     enable_clinical_trials_gov: bool = True
     enable_pubmed: bool = True
@@ -182,6 +188,19 @@ class Settings(BaseSettings):
     ai_org_match_auto_threshold: float = Field(0.92, ge=0, le=1)
     ai_org_match_review_threshold: float = Field(0.80, ge=0, le=1)
     ai_max_docs_per_run: int = Field(5000, ge=1)
+
+    # Agents (cews agent ..., cews chat-serve): the tool-calling loop over the MCP server, and
+    # the web chat window. Both need an LLM configured above (LLM_PROVIDER != none) to do
+    # anything; with no LLM they refuse to start rather than silently returning empty answers.
+    agent_max_tool_turns: int = Field(6, ge=1)  # a safety cap on the LLM <-> tool back-and-forth
+    agent_max_tokens: int = Field(800, ge=1)
+    # How much of an uploaded document is handed to the model in one go. There is no retrieval
+    # step (see docs/agents.md): the whole document, up to this many characters, goes straight
+    # into the conversation. Roughly 4 characters per token, so the default is about 10k tokens -
+    # a conservative number that fits comfortably in a small local model's context window.
+    agent_document_char_limit: int = Field(40_000, ge=1000)
+    chat_host: str = "127.0.0.1"
+    chat_port: int = Field(5000, ge=1, le=65535)
 
     # Scoring
     scoring_config_file: Path = Path("./config/scoring_weights.yaml")
@@ -352,6 +371,23 @@ def _format_validation_error(exc: ValidationError) -> tuple[str, list[str]]:
         problems.append(detail)
     message = "Invalid configuration:\n" + "\n".join(f"  - {p}" for p in problems)
     return message, problems
+
+
+def resolve_env_file(env_file: str | Path | None) -> str | Path | None:
+    """What ``load_settings`` should actually be given for a caller's ``env_file`` value.
+
+    An empty string or ``None`` here means "no specific file was named" - the CLI's own default
+    when ``--env-file`` is not given, and a dashboard text box's own state before anyone types
+    into it - and both should mean the SAME thing ``load_settings()`` means when called with no
+    argument at all: try the project's own ``.env``, quietly proceeding without one if it is
+    missing. That is different from explicitly passing ``env_file=None`` to ``load_settings``
+    itself, which means "skip dotenv files entirely, even the default one" - a real, once-shipped
+    bug in the dashboard came from confusing these two.
+
+    A caller with an actual path (a non-empty string, or a ``Path``) gets it back unchanged, and
+    ``load_settings`` still requires that specific file to exist.
+    """
+    return env_file if env_file else DEFAULT_ENV_FILE
 
 
 def load_settings(

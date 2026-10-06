@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cews.constants import MAX_ORG_NAME_LENGTH, OrganizationType
 from cews.normalization.organizations import (
@@ -131,3 +133,38 @@ def test_affiliation_parsing(affiliation: str, expected: list[str]) -> None:
 def test_affiliation_parsing_caps_the_number_of_names() -> None:
     crowded = "; ".join(f"Fixture Labs {i}" for i in range(10))
     assert len(split_affiliation(crowded)) <= 3
+
+
+# --------------------------------------------------------------------------------------
+# Regression: a candidate fragment longer than MAX_ORG_NAME_LENGTH must not crash
+# --------------------------------------------------------------------------------------
+def test_an_overlong_fragment_with_no_comma_is_not_mistaken_for_an_organization() -> None:
+    """Seen in a real run: a long department and institution name with no comma between them
+    (so it never gets split into shorter pieces) reached normalize_organization_name() directly
+    and crashed the whole record, one call site behind where organization resolution itself
+    already handles the same error."""
+    huge = "Department of Molecular Oncology and Translational Immunotherapeutics " * 4
+    assert len(huge) > MAX_ORG_NAME_LENGTH
+    result = split_affiliation(f"{huge}, Fixture Oncology, Inc., Boston, MA, USA.")
+    assert result == ["Fixture Oncology, Inc"]  # the huge fragment is dropped, the real one kept
+
+
+def test_an_overlong_fragment_alone_falls_back_without_raising() -> None:
+    huge = "A" * (MAX_ORG_NAME_LENGTH + 50)
+    assert split_affiliation(huge) == [huge]  # nothing looked like an org name; the raw fallback
+
+
+@given(st.text(min_size=0, max_size=600))
+@settings(max_examples=300)
+def test_split_affiliation_never_raises_on_any_text(text: str) -> None:
+    split_affiliation(text)
+
+
+@given(
+    st.text(
+        alphabet=st.characters(min_codepoint=0x20, max_codepoint=0x2FFFF), min_size=1, max_size=600
+    )
+)
+@settings(max_examples=300)
+def test_split_affiliation_never_raises_on_wide_unicode_either(text: str) -> None:
+    split_affiliation(text)

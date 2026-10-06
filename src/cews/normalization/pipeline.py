@@ -20,12 +20,13 @@ method), so nothing is duplicated, and only records still marked ``new`` are pro
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.util import identity_key
 
 from cews.constants import ProcessingStatus, RelationshipType, SourceType
 from cews.database.models import (
@@ -164,8 +165,9 @@ def topic_fields(record: SourceRecord, detail: Any) -> dict[str, Any]:
     return fields
 
 
-def _pending(session: Session, reprocess: bool, limit: int | None) -> Sequence[SourceRecord]:
-    query = select(SourceRecord).order_by(SourceRecord.id)
+def _pending_ids(session: Session, reprocess: bool, limit: int | None) -> list[int]:
+    """The ids of the records to normalize, without loading the records themselves."""
+    query = select(SourceRecord.id).order_by(SourceRecord.id)
     if not reprocess:
         query = query.where(SourceRecord.processing_status == ProcessingStatus.NEW.value)
     if limit is not None:
@@ -173,9 +175,19 @@ def _pending(session: Session, reprocess: bool, limit: int | None) -> Sequence[S
     return list(session.scalars(query))
 
 
-def _batches(items: Sequence[SourceRecord], size: int) -> Iterator[Sequence[SourceRecord]]:
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
+def _release(session: Session, batch: Sequence[SourceRecord]) -> None:
+    """Drop a committed batch's records and their detail rows from the session's memory.
+
+    Only these are released: the organizations and alias rows the resolver is still updating
+    must stay attached so later changes to them are saved.
+    """
+    for record in batch:
+        model = DETAIL_MODELS.get(record.record_type)
+        if model is not None:
+            detail = session.identity_map.get(identity_key(model, record.id))
+            if detail is not None:
+                session.expunge(detail)
+        session.expunge(record)
 
 
 def normalize_records(
@@ -188,6 +200,7 @@ def normalize_records(
     batch_size: int = DEFAULT_BATCH_SIZE,
     deduplicate: bool = True,
     progress: Callable[[int, int], None] | None = None,
+    commit_each_batch: bool = False,
 ) -> NormalizationSummary:
     """Normalize pending records. The caller owns the transaction.
 
@@ -196,15 +209,21 @@ def normalize_records(
         reprocess: also process records already marked normalized.
         deduplicate: run the cross-source duplicate pass afterwards.
         progress: called with (done, total) after each batch.
+        commit_each_batch: commit after every batch instead of leaving that to the caller, and
+            release the batch's records from memory. A run that is interrupted then keeps
+            everything it finished and the next run carries on from there, instead of starting
+            again from nothing; it also lets go of the database's single write slot between
+            batches. Off by default because the caller normally owns the transaction.
 
     Raises:
         ValueError: if ``batch_size`` is not positive.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    records = _pending(session, reprocess, limit)
+    pending = _pending_ids(session, reprocess, limit)
+    total = len(pending)
     summary = NormalizationSummary()
-    if not records:
+    if not pending:
         LOGGER.info("no records to normalize")
         return summary
 
@@ -214,7 +233,13 @@ def normalize_records(
     known_org_links: set[tuple[int, int, str]] = set()
     known_topic_links: set[tuple[int, int, str]] = set()
 
-    for batch in _batches(records, batch_size):
+    for start in range(0, total, batch_size):
+        batch_ids = pending[start : start + batch_size]
+        batch = list(
+            session.scalars(
+                select(SourceRecord).where(SourceRecord.id.in_(batch_ids)).order_by(SourceRecord.id)
+            )
+        )
         # Links already stored (from an earlier pass, or a reprocess) must not be inserted twice.
         record_ids = [record.id for record in batch]
         known_org_links.update(
@@ -255,8 +280,18 @@ def normalize_records(
                 summary.failures += 1
                 LOGGER.debug("failure detail: %s", exc)
         session.flush()
+        done = summary.records_processed + summary.failures
+        if commit_each_batch:
+            session.commit()
+            _release(session, batch)
+        LOGGER.info(
+            "normalized %s of %s records (%s organizations created so far)",
+            done,
+            total,
+            resolver.stats.created,
+        )
         if progress is not None:
-            progress(summary.records_processed + summary.failures, len(records))
+            progress(done, total)
 
     summary.organizations_created = resolver.stats.created
     summary.review_items = resolver.stats.review_items

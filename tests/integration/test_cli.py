@@ -27,6 +27,8 @@ def env_file(tmp_path: Path) -> Path:
         f"PROJECT_ROOT={tmp_path}\nSQLITE_PATH=./data/cews.db\n"
         f"TOPIC_TAXONOMY_FILE={TAXONOMY_FILE}\nSCORING_CONFIG_FILE={SCORING_FILE}\n"
         f"SOURCE_REGISTRY_FILE={REGISTRY_FILE}\n"
+        f"BENCHMARK_TOPICS_FILE={SCORING_FILE.parent / 'benchmark_topics.yaml'}\n"
+        f"ANNOUNCEMENT_LABELS_FILE={SCORING_FILE.parent / 'announcement_eval_labels.yaml'}\n"
         "ENABLE_CLINICAL_TRIALS_GOV=false\nENABLE_PUBMED=false\nENABLE_EUROPE_PMC=false\n",
         encoding="utf-8",
     )
@@ -853,3 +855,300 @@ def test_review_requires_an_initialized_database(
     assert _run(env_file, "review") == EXIT_FAILURE
     assert "db-init" in capsys.readouterr().out
     assert _run(env_file, "review", "approve", "1") == EXIT_FAILURE
+
+
+# --------------------------------------------------------------------------------------
+# insights
+# --------------------------------------------------------------------------------------
+def _prepare_insights(env_file: Path) -> None:
+    _prepare_scores(env_file)
+    _run(env_file, "score", "--as-of", "2026-09-01")
+
+
+def test_insights_requires_an_initialized_database(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run(env_file, "insights") == EXIT_FAILURE
+    assert "db-init" in capsys.readouterr().out
+
+
+def test_insights_without_scores_says_what_to_run(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "insights") == EXIT_OK
+    assert "cews score" in capsys.readouterr().out
+
+
+def test_insights_produces_findings_with_all_three_parts(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights", "--top", "20") == EXIT_OK
+    out = capsys.readouterr().out
+    assert "found" in out and "stored" in out
+    assert "fact      :" in out and "means     :" in out and "do next   :" in out
+
+
+def test_insights_is_idempotent(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights") == EXIT_OK
+    first_out = capsys.readouterr().out
+    assert _run(env_file, "insights") == EXIT_OK
+    second_out = capsys.readouterr().out
+    assert "0 stored" in second_out
+    assert "already known" in second_out
+    # the same findings are still shown even though nothing new was stored
+    assert first_out.count("fact      :") == second_out.count("fact      :")
+
+
+def test_insights_json_is_pure_json(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights", "--json") == EXIT_OK
+    out = capsys.readouterr().out
+    assert "note:" not in out
+    payload = json.loads(out)
+    assert "run" in payload and "insights" in payload
+    if payload["insights"]:
+        assert {
+            "type",
+            "severity",
+            "title",
+            "observed_fact",
+            "interpretation",
+            "recommended_review",
+        } <= set(payload["insights"][0])
+
+
+def test_insights_can_preview_without_saving(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights", "--no-store") == EXIT_OK
+    assert "0 stored" in capsys.readouterr().out
+    capsys.readouterr()
+    # nothing was saved, so a real run afterwards should still find (and store) the same things
+    assert _run(env_file, "insights") == EXIT_OK
+    out = capsys.readouterr().out
+    assert "0 already known" in out or "already known" not in out.split("\n")[0]
+
+
+def test_insights_respects_the_top_limit(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights", "--top", "1") == EXIT_OK
+    out = capsys.readouterr().out
+    assert out.count("fact      :") <= 1
+
+
+def test_insights_never_word_opportunities_as_a_recommendation(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "insights", "--top", "50") == EXIT_OK
+    out = capsys.readouterr().out
+    if "opportunity for review" in out:
+        assert "not an investment, commercial or scientific recommendation" in out
+
+
+# --------------------------------------------------------------------------------------
+# evaluate, alerts, expert-export
+# --------------------------------------------------------------------------------------
+def _row_counts(env_file: Path) -> tuple[int, int]:
+    from sqlalchemy import func, select
+
+    from cews.database.connection import create_db_engine, create_session_factory, session_scope
+    from cews.database.models import FeatureValue, Score
+    from cews.settings import load_settings
+
+    factory = create_session_factory(create_db_engine(load_settings(env_file=env_file)))
+    with session_scope(factory) as session:
+        return (
+            int(session.scalar(select(func.count()).select_from(Score)) or 0),
+            int(session.scalar(select(func.count()).select_from(FeatureValue)) or 0),
+        )
+
+
+def test_evaluate_requires_an_initialized_database(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run(env_file, "evaluate") == EXIT_FAILURE
+    assert "db-init" in capsys.readouterr().out
+
+
+def test_evaluate_keeps_the_three_kinds_of_evidence_under_separate_headings(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "data_quality", "alerts", "ai_ablation") == EXIT_OK
+    out = capsys.readouterr().out
+    assert out.index("ALGORITHM") < out.index("BACKTEST") < out.index("EXPERT VALIDATION")
+    assert "data quality" in out and "alerts" in out and "announcements:" in out
+    assert "org matching : skipped" in out
+
+
+def test_evaluate_json_is_pure_json_with_the_three_groups(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "data_quality", "alerts", "--json") == EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert {"algorithm", "backtest", "expert_validation", "errors"} <= set(payload)
+    assert "data_quality" in payload["algorithm"] and "alerts" in payload["expert_validation"]
+
+
+def test_evaluate_reports_a_section_that_cannot_run_without_failing(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "forecast") == EXIT_OK
+    out = capsys.readouterr().out
+    assert "could not run" in out and "cews forecast" in out
+
+
+def test_evaluate_refuses_an_unknown_section(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "nonsense") == EXIT_FAILURE
+    assert "unknown section" in capsys.readouterr().out
+
+
+def test_evaluate_can_run_without_saving(env_file: Path) -> None:
+    from cews.database.connection import create_db_engine, create_session_factory, session_scope
+    from cews.database.models import EvaluationRun
+    from cews.settings import load_settings
+
+    _prepare_insights(env_file)
+    assert _run(env_file, "evaluate", "--only", "alerts", "--no-store") == EXIT_OK
+    factory = create_session_factory(create_db_engine(load_settings(env_file=env_file)))
+    with session_scope(factory) as session:
+        assert session.query(EvaluationRun).count() == 0
+    assert _run(env_file, "evaluate", "--only", "alerts") == EXIT_OK
+    with session_scope(factory) as session:
+        assert session.query(EvaluationRun).count() == 1
+
+
+def test_evaluate_leaves_the_database_as_it_found_it(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The backtest writes historical rows to work; evaluate must remove every one of them."""
+    _prepare_insights(env_file)
+    before = _row_counts(env_file)
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "backtest", "--json") == EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["backtest"]["backtest"]["folds"] > 0
+    assert _row_counts(env_file) == before
+
+
+def test_alerts_requires_an_initialized_database(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run(env_file, "alerts") == EXIT_FAILURE
+    assert "db-init" in capsys.readouterr().out
+
+
+def test_alerts_with_no_insights_says_what_to_run(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "alerts") == EXIT_OK
+    assert "cews insights" in capsys.readouterr().out
+
+
+def test_alerts_can_be_listed_rated_and_relisted(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    _run(env_file, "insights")
+    capsys.readouterr()
+    assert _run(env_file, "alerts") == EXIT_OK
+    listing = capsys.readouterr().out
+    first_id = listing.split("[", 1)[1].split("]")[0].strip()
+    assert _run(env_file, "alerts", "rate", first_id, "relevant", "--reviewer", "ana") == EXIT_OK
+    assert "rated relevant" in capsys.readouterr().out
+    assert _run(env_file, "alerts") == EXIT_OK
+    assert "relevant" in capsys.readouterr().out.split("\n")[2]
+
+
+def test_alerts_refuses_an_unknown_rating(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    _run(env_file, "insights")
+    capsys.readouterr()
+    assert _run(env_file, "alerts", "rate", "1", "great") == EXIT_FAILURE
+    assert "unknown rating" in capsys.readouterr().out
+
+
+def test_alerts_rate_without_arguments_shows_usage(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "alerts", "rate") == EXIT_FAILURE
+    assert "usage: cews alerts rate" in capsys.readouterr().out
+
+
+def test_alert_ratings_flow_into_the_evaluation(
+    env_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepare_insights(env_file)
+    _run(env_file, "insights")
+    capsys.readouterr()
+    _run(env_file, "alerts")
+    first_id = capsys.readouterr().out.split("[", 1)[1].split("]")[0].strip()
+    _run(env_file, "alerts", "rate", first_id, "relevant")
+    capsys.readouterr()
+    assert _run(env_file, "evaluate", "--only", "alerts", "--json") == EXIT_OK
+    alerts = json.loads(capsys.readouterr().out)["expert_validation"]["alerts"]
+    assert alerts["reviewed"] == 1 and alerts["precision"] == 1.0
+
+
+def test_expert_export_needs_scores_first(
+    env_file: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    _run(env_file, "db-init")
+    capsys.readouterr()
+    assert _run(env_file, "expert-export", "--out", str(tmp_path / "s.csv")) == EXIT_OK
+    assert "cews score" in capsys.readouterr().out
+
+
+def test_expert_export_round_trips_through_evaluate(
+    env_file: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    import csv
+
+    _prepare_insights(env_file)
+    sheet = tmp_path / "sheet.csv"
+    capsys.readouterr()
+    assert _run(env_file, "expert-export", "--out", str(sheet), "--limit", "4") == EXIT_OK
+    assert "wrote 4 topic(s)" in capsys.readouterr().out
+    with sheet.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+        fieldnames = list(rows[0])
+    rows[0]["expert_rating"] = "relevant"
+    with sheet.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    assert (
+        _run(env_file, "evaluate", "--only", "expert_sheet", "--expert-file", str(sheet), "--json")
+        == EXIT_OK
+    )
+    summary = json.loads(capsys.readouterr().out)["expert_validation"]["expert_sheet"]
+    assert summary["rows"] == 4 and summary["rated"] == 1

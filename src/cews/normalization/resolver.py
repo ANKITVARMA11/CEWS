@@ -18,12 +18,13 @@ Every link records the method, the confidence and the reason.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_left, insort
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,18 @@ LOGGER = logging.getLogger(__name__)
 REVIEW_QUEUE = "organization_match"
 PARENT_QUEUE = "organization_parent"
 MAX_PREFIX_TOKENS = 2
+
+
+def sorted_words(text: str) -> str:
+    """The words of ``text`` in alphabetical order, single-spaced.
+
+    ``token_sort_ratio(a, b)`` is by definition the plain ratio of these two strings, so sorting a
+    name once when it is stored (instead of again inside every comparison) gives the same scores
+    much faster.
+    """
+    return " ".join(sorted(text.split()))
+
+
 KEY_CONFIDENCE = {
     "exact": 1.0,
     "normalized": 0.98,
@@ -92,6 +105,13 @@ class OrganizationResolver:
 
     One instance is used for a whole normalization run: it keeps an in-memory index of the
     organizations and aliases it has seen, so repeated names cost nothing.
+
+    Every lookup that could otherwise scan all known organizations for each new name (prefix
+    matches, related-company suggestions, the alias rows of one organization) goes through an
+    index instead, and fuzzy matching runs in rapidfuzz's compiled loop with a cutoff. The results
+    are identical to scanning everything, which the test suite checks against the plain scans;
+    the point is that a run over tens of thousands of distinct organizations no longer takes time
+    proportional to the square of that number.
     """
 
     def __init__(self, session: Session, settings: Settings, *, use_fuzzy: bool = True) -> None:
@@ -108,6 +128,14 @@ class OrganizationResolver:
         self._organizations: dict[int, Organization] = {}
         self._names: dict[int, NormalizedName] = {}
         self._queued: set[tuple[str, str]] = set()
+        # Indexes over organization names (see the class docstring). Id lists are kept ascending.
+        self._token_index: dict[tuple[str, ...], list[int]] = defaultdict(list)
+        self._prefix_index: dict[tuple[str, ...], list[int]] = defaultdict(list)
+        self._leading_index: dict[str, list[int]] = defaultdict(list)
+        self._fuzzy_ids: list[int] = []
+        self._fuzzy_text: list[str] = []
+        self._fuzzy_position: dict[int, int] = {}
+        self._rows_by_org: dict[int, dict[tuple[int, str], OrganizationAlias]] = defaultdict(dict)
         self._load()
 
     # ---- index ---------------------------------------------------------------------------
@@ -118,6 +146,9 @@ class OrganizationResolver:
             self._index[alias.normalized_alias].add(alias.organization_id)
             self._aliases.add((alias.organization_id, alias.normalized_alias))
             self._alias_rows[(alias.organization_id, alias.normalized_alias)] = alias
+            self._rows_by_org[alias.organization_id][
+                (alias.organization_id, alias.normalized_alias)
+            ] = alias
         for item in self.session.scalars(
             select(ReviewQueueItem).where(
                 ReviewQueueItem.queue_type.in_([REVIEW_QUEUE, PARENT_QUEUE])
@@ -129,9 +160,46 @@ class OrganizationResolver:
         self._organizations[organization.id] = organization
         name = normalize_organization_name(organization.canonical_name)
         self._names[organization.id] = name
+        self._index_name(organization.id, name)
         for _, key in name.match_keys():
             self._index[key].add(organization.id)
         self._index[organization.normalized_name].add(organization.id)
+
+    # ---- name indexes --------------------------------------------------------------------
+    def _index_name(self, organization_id: int, name: NormalizedName) -> None:
+        tokens = tuple(name.expanded_tokens)
+        if tokens:
+            insort(self._token_index[tokens], organization_id)
+            for length in range(1, len(tokens)):
+                insort(self._prefix_index[tokens[:length]], organization_id)
+            if len(tokens) > 1:
+                insort(self._leading_index[tokens[0]], organization_id)
+        if name.expanded:
+            words = sorted_words(name.expanded)
+            if organization_id in self._fuzzy_position:
+                self._fuzzy_text[self._fuzzy_position[organization_id]] = words
+            else:
+                self._fuzzy_position[organization_id] = len(self._fuzzy_ids)
+                self._fuzzy_ids.append(organization_id)
+                self._fuzzy_text.append(words)
+
+    def _unindex_name(self, organization_id: int, name: NormalizedName) -> None:
+        """Take a name's token entries out of the indexes (the fuzzy list is updated in place)."""
+
+        def drop(bucket: dict[Any, list[int]], key: Any) -> None:
+            ids = bucket.get(key)
+            if ids:
+                position = bisect_left(ids, organization_id)
+                if position < len(ids) and ids[position] == organization_id:
+                    del ids[position]
+
+        tokens = tuple(name.expanded_tokens)
+        if tokens:
+            drop(self._token_index, tokens)
+            for length in range(1, len(tokens)):
+                drop(self._prefix_index, tokens[:length])
+            if len(tokens) > 1:
+                drop(self._leading_index, tokens[0])
 
     def _add_alias(self, organization: Organization, name: NormalizedName, method: str) -> None:
         """Record the spellings of this name against the organization (one row per key)."""
@@ -158,6 +226,7 @@ class OrganizationResolver:
             )
             self.session.add(row)
             self._alias_rows[marker] = row
+            self._rows_by_org[organization.id][marker] = row
             self._index[key].add(organization.id)
 
     # ---- matching ------------------------------------------------------------------------
@@ -169,25 +238,33 @@ class OrganizationResolver:
         return "", []
 
     def _by_prefix(self, name: NormalizedName) -> list[int]:
+        """Organizations whose name starts with this (short) name and is longer than it."""
         if not 1 <= len(name.expanded_tokens) <= MAX_PREFIX_TOKENS:
             return []
-        prefix = name.expanded_tokens
-        return sorted(
-            organization_id
-            for organization_id, other in self._names.items()
-            if len(other.expanded_tokens) > len(prefix)
-            and other.expanded_tokens[: len(prefix)] == prefix
-        )
+        return list(self._prefix_index.get(tuple(name.expanded_tokens), ()))
 
     def _by_fuzzy(self, name: NormalizedName) -> tuple[int | None, float]:
-        best_id, best_score = None, 0.0
-        for organization_id, other in self._names.items():
-            if not other.expanded or not name.expanded:
-                continue
-            score = fuzz.token_sort_ratio(name.expanded, other.expanded) / 100
-            if score > best_score:
-                best_id, best_score = organization_id, score
-        return best_id, best_score
+        """The most similar known organization, if it is similar enough to matter.
+
+        Anything below the lower of the two thresholds is never acted on by the caller, so it is
+        not returned: the search stops early on candidates that cannot reach it. Ties go to the
+        organization seen first, as a plain scan would.
+        """
+        if not name.expanded or not self._fuzzy_text:
+            return None, 0.0
+        floor = min(self.auto_threshold, self.review_threshold)
+        hit = process.extractOne(
+            sorted_words(name.expanded),
+            self._fuzzy_text,
+            scorer=fuzz.ratio,
+            score_cutoff=max(floor * 100 - 1e-6, 0.0),
+        )
+        if hit is None:
+            return None, 0.0
+        score = hit[1] / 100
+        if score < floor:  # the cutoff above is slightly loose; the exact comparison is here
+            return None, 0.0
+        return self._fuzzy_ids[hit[2]], score
 
     def _compatible(self, name: NormalizedName, organization: Organization) -> bool:
         """Companies are never fuzzily merged into universities, hospitals or agencies."""
@@ -215,9 +292,7 @@ class OrganizationResolver:
 
         best_row: OrganizationAlias | None = None
         best = (self._mentions_for(organization, current), display_quality(current.original))
-        for (organization_id, _), row in self._alias_rows.items():
-            if organization_id != organization.id:
-                continue
+        for row in self._rows_by_org[organization.id].values():
             candidate = (row.mention_count or 0, display_quality(row.alias))
             if candidate > best:
                 best_row, best = row, candidate
@@ -227,7 +302,9 @@ class OrganizationResolver:
         if parsed.expanded != current.expanded:
             return
         organization.canonical_name = best_row.alias[:255]
+        self._unindex_name(organization.id, current)
         self._names[organization.id] = parsed
+        self._index_name(organization.id, parsed)
         classification = classify_organization_type(best_row.alias)
         if classification.organization_type is not OrganizationType.UNKNOWN:
             organization.organization_type = classification.organization_type.value
@@ -276,39 +353,51 @@ class OrganizationResolver:
         also catches unrelated companies with similar names, which is exactly why it is only
         ever a suggestion: CEWS never sets ``parent_id`` on its own.
         """
-        if not name.expanded_tokens:
+        tokens = tuple(name.expanded_tokens)
+        if not tokens:
             return
-        for other_id, other in sorted(self._names.items()):
-            if other_id == organization.id or not other.expanded_tokens:
-                continue
-            shorter, longer = sorted((other.expanded_tokens, name.expanded_tokens), key=len)
-            leading = name.expanded_tokens[0]
-            if len(shorter) < len(longer) and longer[: len(shorter)] == shorter:
-                reason = "one name is the start of the other"
-            elif (
-                other.expanded_tokens[0] == leading
-                and leading not in DIVISION_WORDS
-                and len(other.expanded_tokens) > 1
-                and len(name.expanded_tokens) > 1
-            ):
-                reason = "both names start with the same word"
-            else:
-                continue
-            other_organization = self._organizations[other_id]
-            pair = sorted([organization.canonical_name, other_organization.canonical_name])
-            self._queue(
-                PARENT_QUEUE,
-                f"{pair[0]}|{pair[1]}",
-                {
-                    "organizations": pair,
-                    "reason": reason,
-                    "action": (
-                        "decide whether these are parent and subsidiary, the same company, or "
-                        "unrelated companies with similar names; CEWS never links them itself"
-                    ),
-                },
-            )
+        own = organization.id
+
+        def first_other(ids: list[int] | None) -> int | None:
+            for candidate_id in ids or ():
+                if candidate_id != own:
+                    return candidate_id
+            return None
+
+        # The first other organization (lowest id) that is related in either of the two ways,
+        # found through the indexes instead of by looking at every organization.
+        found = [
+            first_other(self._token_index.get(tokens[:length])) for length in range(1, len(tokens))
+        ]
+        found.append(first_other(self._prefix_index.get(tokens)))
+        leading = tokens[0]
+        if len(tokens) > 1 and leading not in DIVISION_WORDS:
+            found.append(first_other(self._leading_index.get(leading)))
+        candidates = [candidate_id for candidate_id in found if candidate_id is not None]
+        if not candidates:
             return
+
+        other_id = min(candidates)
+        other = self._names[other_id]
+        shorter, longer = sorted((other.expanded_tokens, name.expanded_tokens), key=len)
+        if len(shorter) < len(longer) and longer[: len(shorter)] == shorter:
+            reason = "one name is the start of the other"
+        else:
+            reason = "both names start with the same word"
+        other_organization = self._organizations[other_id]
+        pair = sorted([organization.canonical_name, other_organization.canonical_name])
+        self._queue(
+            PARENT_QUEUE,
+            f"{pair[0]}|{pair[1]}",
+            {
+                "organizations": pair,
+                "reason": reason,
+                "action": (
+                    "decide whether these are parent and subsidiary, the same company, or "
+                    "unrelated companies with similar names; CEWS never links them itself"
+                ),
+            },
+        )
 
     # ---- public --------------------------------------------------------------------------
     def create_organization(
