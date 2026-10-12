@@ -42,6 +42,7 @@ from cews.database.models import (
     Topic,
 )
 from cews.features.time_windows import month_range
+from cews.normalization.review_actions import pending_review_count
 
 LOGGER = logging.getLogger(__name__)
 
@@ -234,14 +235,10 @@ def overview(session: Session, *, score_date: date | None = None) -> Overview:
         session.scalar(select(func.count()).select_from(Topic).where(Topic.active.is_(True))) or 0
     )
     result.last_collected = session.scalar(select(func.max(SourceRecord.fetched_at)))
-    result.needs_review = int(
-        session.scalar(
-            select(func.count())
-            .select_from(ReviewQueueItem)
-            .where(ReviewQueueItem.status == "pending")
-        )
-        or 0
-    )
+    # The same count the Review page and the chat agent's `list_review_queue` tool use (see
+    # `pending_review_count`'s docstring) - this number must never be computed three different
+    # ways, or the three surfaces drift apart exactly the way they once did.
+    result.needs_review = pending_review_count(session)
     if when is not None:
         trends = scores_for(session, ScoreType.TREND.value, score_date=when)
         result.emerging_trends = sum(1 for row in trends if row["qualified"])

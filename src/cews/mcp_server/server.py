@@ -47,6 +47,9 @@ READ_ONLY = ToolAnnotations(
 KindArg = Annotated[str, Field(description="'topic' or 'competitor'")]
 RefArg = Annotated[str, Field(description="An id or (part of) the name, e.g. 'CRISPR' or '11'")]
 LimitArg = Annotated[int, Field(description="How many to return (1 to 50)", ge=1, le=50)]
+OffsetArg = Annotated[
+    int, Field(description="How many matching items to skip, for paging through a long queue", ge=0)
+]
 
 
 def build_server(settings: Settings, factory: sessionmaker[Session]) -> FastMCP:
@@ -151,12 +154,16 @@ def build_server(settings: Settings, factory: sessionmaker[Session]) -> FastMCP:
         return service.latest_evaluation()
 
     @mcp.tool(title="Review queue", annotations=READ_ONLY)
-    def list_review_queue(limit: LimitArg = 20) -> dict[str, Any]:
+    def list_review_queue(limit: LimitArg = 20, offset: OffsetArg = 0) -> dict[str, Any]:
         """Decisions waiting for a person.
 
         Discovered topics and uncertain organization matches. Read-only: a person resolves them
-        with `cews review approve|reject ID`."""
-        return service.review_queue(limit)
+        with `cews review approve|reject ID` or the dashboard's Review page - never through this
+        tool. For "how many are left" or any count, read the result's `total_pending`, never the
+        length of the `pending` list you got back - that list is only ever this one page, and a
+        real queue is routinely much larger than any single page (`offset` pages through the
+        rest)."""
+        return service.review_queue(limit, offset)
 
     @mcp.resource("cews://methodology", title="How scores are built", mime_type="text/markdown")
     def methodology() -> str:

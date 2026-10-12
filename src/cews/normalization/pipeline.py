@@ -42,7 +42,6 @@ from cews.database.models import (
     Topic,
 )
 from cews.normalization.deduplication import DeduplicationSummary, find_duplicates
-from cews.normalization.organizations import split_affiliation
 from cews.normalization.resolver import OrganizationResolver
 from cews.normalization.topics import Taxonomy, TopicMatcher
 from cews.settings import Settings
@@ -50,7 +49,6 @@ from cews.settings import Settings
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 500
-MAX_AFFILIATIONS = 10
 # How much a mention of an organization says about its involvement.
 RELATIONSHIP_CONFIDENCE: dict[RelationshipType, float] = {
     RelationshipType.SPONSOR: 0.95,
@@ -128,10 +126,20 @@ def organization_mentions(record: SourceRecord, detail: Any) -> list[Mention]:
         for collaborator in collaborators if isinstance(collaborators, list) else []:
             if isinstance(collaborator, Mapping):
                 add(collaborator.get("name"), RelationshipType.PARTNER)
-    elif isinstance(detail, Publication):
-        for affiliation in (detail.affiliations or [])[:MAX_AFFILIATIONS]:
-            for candidate in split_affiliation(str(affiliation)):
-                add(candidate, RelationshipType.AFFILIATION)
+    # Deliberately nothing for Publication: an author's affiliation string is not a candidate
+    # competitor, but it used to be run through the organization resolver anyway. Affiliation
+    # text is extremely free-form (department, building, city, country all folded into one
+    # string), so almost none of it ever matched an existing organization cleanly - each
+    # distinct-looking affiliation created its own new Organization row and its own review-queue
+    # item. Across three years of publications (up to 10 affiliations per paper, as this used to
+    # cap it), that is what actually produced a review queue of 146,000+ pending items against
+    # 20 tracked competitors - not a deduplication bug (verified directly: the exact same
+    # organization name, and near-identical variants of it, resolve to one organization and one
+    # review item every time, across as many repeated pipeline runs as it is given), but treating
+    # co-authorship the same as sponsorship. If a paper's affiliation genuinely identifies a
+    # tracked competitor, that still shows up through the record's other fields (title, abstract,
+    # topic links); it is simply never used to create a *new* organization or review item on its
+    # own.
     elif isinstance(detail, Patent):
         add(detail.assignee_name, RelationshipType.ASSIGNEE)
     elif isinstance(detail, FundingAward):
@@ -261,21 +269,30 @@ def normalize_records(
             ).all()
         )
         for record in batch:
+            record_id = record.id  # captured now: unreachable on a session left mid-rollback
             try:
-                _normalize_one(
-                    session,
-                    record,
-                    resolver=resolver,
-                    matcher=matcher,
-                    topic_ids=topic_ids,
-                    known_org_links=known_org_links,
-                    known_topic_links=known_topic_links,
-                    summary=summary,
-                )
+                with session.begin_nested():  # one record\'s own flush failure, isolated: a
+                    # rollback here undoes only this SAVEPOINT, not the whole batch\'s work so
+                    # far. Without this, a failure deep in one record\'s flush (an IntegrityError
+                    # from create_organization that even its own recovery could not absorb, say)
+                    # left the *outer* transaction unusable - the per-record except below could
+                    # not even log record.id without tripping a second, more confusing
+                    # PendingRollbackError, which aborted the entire batch instead of just this
+                    # one record. Seen for real, not hypothetical: this is what actually happened.
+                    _normalize_one(
+                        session,
+                        record,
+                        resolver=resolver,
+                        matcher=matcher,
+                        topic_ids=topic_ids,
+                        known_org_links=known_org_links,
+                        known_topic_links=known_topic_links,
+                        summary=summary,
+                    )
                 record.processing_status = ProcessingStatus.NORMALIZED.value
                 summary.records_processed += 1
             except Exception as exc:  # one bad record must not stop the pass
-                LOGGER.exception("normalizing record %s failed", record.id)
+                LOGGER.exception("normalizing record %s failed", record_id)
                 record.processing_status = ProcessingStatus.FAILED.value
                 summary.failures += 1
                 LOGGER.debug("failure detail: %s", exc)

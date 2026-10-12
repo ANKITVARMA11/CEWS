@@ -459,7 +459,7 @@ RUNTIME_DEPS: tuple[str, ...] = (
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.29,<1",
     "streamlit>=1.32,<2",
-    "matplotlib>=3.8,<4",  # charts are rendered server-side as images (no JavaScript)
+    "plotly>=5.18,<7",  # dashboard charts render as live, interactive figures, not static images
     "Jinja2>=3.1,<4",
     "openpyxl>=3.1,<4",
 )
@@ -471,6 +471,12 @@ MCP_DEPS: tuple[str, ...] = (
     # ML layout models (see the module for why not docling).
     "pypdf>=4.0,<6",
     "python-docx>=1.1,<2",
+)
+CREW_DEPS: tuple[str, ...] = (
+    # Optional: the CrewAI multi-agent crew (cews crew brief), collaborating over the same MCP
+    # server cews.agents does (see src/cews/crew/__init__.py). Needs requirements-mcp.txt too.
+    "crewai>=1.15,<2",
+    "crewai-tools[mcp]>=1.15,<2",
 )
 
 DEV_DEPS: tuple[str, ...] = (
@@ -709,6 +715,7 @@ dependencies = __RUNTIME__
 [project.optional-dependencies]
 ai = __AI__
 mcp = __MCP__
+crew = __CREW__
 dev = __DEV__
 
 [project.scripts]
@@ -1453,6 +1460,7 @@ def build_manifest() -> Manifest:
         PYPROJECT_TEMPLATE.replace("__RUNTIME__", _toml_list(RUNTIME_DEPS))
         .replace("__AI__", _toml_list(AI_DEPS))
         .replace("__MCP__", _toml_list(MCP_DEPS))
+        .replace("__CREW__", _toml_list(CREW_DEPS))
         .replace("__DEV__", _toml_list(DEV_DEPS))
     )
     requirements = "# Runtime dependencies (bounded). Keep in sync with pyproject.toml.\n"
@@ -1471,6 +1479,11 @@ def build_manifest() -> Manifest:
         "# (cews agent ..., the dashboard chat widget). See docs/agents.md.\n"
     )
     requirements_mcp += "\n".join(MCP_DEPS) + "\n"
+    requirements_crew = (
+        "# Optional: the CrewAI multi-agent crew (cews crew brief). Also needs "
+        "requirements-mcp.txt.\n"
+    )
+    requirements_crew += "\n".join(CREW_DEPS) + "\n"
     makefile = MAKEFILE_TEMPLATE.replace("<TAB>", "\t")
 
     add(".env.example", ENV_EXAMPLE, critical=True)
@@ -1482,6 +1495,7 @@ def build_manifest() -> Manifest:
     add("requirements-dev.txt", requirements_dev, critical=True)
     add("requirements-ai.txt", requirements_ai, critical=True)
     add("requirements-mcp.txt", requirements_mcp, critical=True)
+    add("requirements-crew.txt", requirements_crew, critical=True)
     add("Makefile", makefile, critical=True)
     add("docker-compose.yml", DOCKER_COMPOSE, critical=True)
     add("pytest.ini", PYTEST_INI, critical=True)

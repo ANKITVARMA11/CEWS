@@ -189,18 +189,20 @@ class Settings(BaseSettings):
     ai_org_match_review_threshold: float = Field(0.80, ge=0, le=1)
     ai_max_docs_per_run: int = Field(5000, ge=1)
 
-    # Agents (cews agent ..., cews chat-serve): the tool-calling loop over the MCP server, and
-    # the web chat window. Both need an LLM configured above (LLM_PROVIDER != none) to do
-    # anything; with no LLM they refuse to start rather than silently returning empty answers.
+    # Agents (cews agent ...): the tool-calling loop over the MCP server. Needs an LLM configured
+    # above (LLM_PROVIDER != none) to do anything; with no LLM it refuses to start rather than
+    # silently returning empty answers.
     agent_max_tool_turns: int = Field(6, ge=1)  # a safety cap on the LLM <-> tool back-and-forth
-    agent_max_tokens: int = Field(800, ge=1)
+    # 800 was confirmed too tight for its own use case: asked to list up to 50 review items, the
+    # model's answer was silently cut off after about 16 - the model never got to say it was
+    # truncating, it just stopped. 2000 gives a 50-item listing real headroom; still bounded, so
+    # a confused model cannot run away with it.
+    agent_max_tokens: int = Field(2000, ge=1)
     # How much of an uploaded document is handed to the model in one go. There is no retrieval
     # step (see docs/agents.md): the whole document, up to this many characters, goes straight
     # into the conversation. Roughly 4 characters per token, so the default is about 10k tokens -
     # a conservative number that fits comfortably in a small local model's context window.
     agent_document_char_limit: int = Field(40_000, ge=1000)
-    chat_host: str = "127.0.0.1"
-    chat_port: int = Field(5000, ge=1, le=65535)
 
     # Scoring
     scoring_config_file: Path = Path("./config/scoring_weights.yaml")

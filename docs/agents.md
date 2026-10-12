@@ -88,6 +88,50 @@ Each of these opens its own MCP connection for the one question and closes it af
 back-and-forth conversation, use the dashboard's chat window instead, which keeps one connection
 open across every question in the session.
 
+## A second agent system: CrewAI (`cews crew`)
+
+Everything above (`cews agent`, the dashboard chat window) is one hand-rolled system: a single
+persona answers a single question. `src/cews/crew/` is a genuinely different, independent second
+system, for when several agents need to collaborate on one task automatically - one agent's
+output becoming the next one's input, rather than a person asking one persona one thing.
+
+Both point at the exact same MCP server. There is only one implementation of "what CEWS's data
+looks like as tools" in this whole project (`src/cews/mcp_server/`); CrewAI is a second kind of
+*client* for it, the same way `cews.agents` is one.
+
+```
+pip install -r requirements-crew.txt    # crewai + crewai-tools[mcp] - also needs requirements-mcp.txt
+cews crew brief
+```
+
+**What it runs** - the Weekly Briefing Crew, three agents, sequential (`src/cews/crew/`):
+
+1. **Researcher** finds the newest, highest-confidence insights.
+2. **Fact-checker** checks each one's claims against its own cited evidence.
+3. **Writer** compiles a briefing from only what the first two actually found and verified.
+
+Each task's output is automatically fed into the next one's prompt (CrewAI's own `context`
+mechanism) - that handoff is the actual value of this second system over the first: verification
+as a separate, automatic step, not something one persona has to remember to do itself.
+
+**Reused, not re-decided**: the three agents' tool allowlists and grounding rules come straight
+from `cews.agents.personas` - the same `ANALYST`/`FACT_CHECKER`/`BRIEFING_WRITER` tool sets and
+the same `COMMON_RULES` text the single-agent system already uses. One set of decisions about
+what a "researcher" or "fact-checker" role may touch, shared by both systems, rather than two
+copies that could quietly drift apart.
+
+**The LLM is configured identically** to `cews agent` - same `.env` settings
+(`LLM_PROVIDER`/`LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY`), mapped the same way
+`cews.ai.llm.LLMClient` already treats them: every provider as "some OpenAI-shaped endpoint," no
+second convention (`src/cews/crew/llm.py`).
+
+**A real gotcha worth knowing about**, hit while building this: `crewai-tools`' own MCP adapter
+checks for a package called `mcp` and, if missing, offers an interactive install prompt - but
+what it actually needs (and what its own error message doesn't mention) is a *separate* package,
+`mcpadapt`, pulled in only by installing `crewai-tools[mcp]` rather than plain `crewai-tools`.
+`requirements-crew.txt` already has this right; worth knowing if you ever see "you are missing
+the 'mcp' package" despite `mcp` clearly being installed.
+
 ## The dashboard chat window
 
 A floating icon at the bottom-left of every dashboard page; clicking it opens a small panel with
@@ -158,5 +202,16 @@ never in these lines, only the provider, model, message count, and whether a too
   own test policy blocks every real network call in a test, so the "and then gets a real answer"
   half of that path was checked by hand instead (see the note at the top of this document).
 
-Not tested: a real language model. Please try `cews agent ask` against your own Ollama or NIM
-setup and tell me what breaks.
+- `cews crew`: connecting to the real MCP server and discovering all 13 real tools through
+  `crewai-tools`' own adapter; real `Agent`/`Task` objects built against that real connection,
+  each agent's tools and each task's chained context checked; the LLM-settings mapping (every
+  CEWS provider, with and without an API key); and the CLI's refusal paths (no LLM, no
+  database) - all against a real MCP subprocess. A full real run - real subprocess, three real
+  agents, three chained tasks, a real HTTP call per agent, a real sequential result - was
+  checked by hand against a scripted local server standing in for the model: all three agents
+  ran in order, each one's task feeding the next, and the final briefing printed correctly. The
+  same network-call test policy that limits `cews agent`'s own automated coverage applies here
+  too.
+
+Not tested: a real language model, for either agent system. Please try `cews agent ask` or
+`cews crew brief` against your own Ollama or NIM setup and tell me what breaks.

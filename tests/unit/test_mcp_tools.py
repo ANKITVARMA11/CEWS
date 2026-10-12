@@ -433,6 +433,47 @@ def test_the_review_queue_shows_ids_a_person_can_act_on(
     )
 
 
+def test_the_review_queue_total_is_never_just_the_page_length(
+    factory: sessionmaker[Session], service: CewsReadService
+) -> None:
+    """Regression: the tool used to return only a capped page with no separate count, so the
+    only number an LLM could ever report for "how many are left" was the page size it happened
+    to get back - which is how a 146,000-item queue was once reported to a person as "20"."""
+    with session_scope(factory) as session:
+        for index in range(5):
+            session.add(
+                ReviewQueueItem(
+                    queue_type="organization_match",
+                    subject_ref=f"Org-{index}",
+                    payload_json={},
+                    status="pending",
+                )
+            )
+    result = service.review_queue(limit=2)
+    assert result["total_pending"] == 5
+    assert result["returned"] == 2
+    assert len(result["pending"]) == 2
+    assert "2 of 5" in result["note"]
+
+
+def test_the_review_queue_offset_pages_through_the_backlog(
+    factory: sessionmaker[Session], service: CewsReadService
+) -> None:
+    with session_scope(factory) as session:
+        for index in range(5):
+            session.add(
+                ReviewQueueItem(
+                    queue_type="organization_match",
+                    subject_ref=f"Org-{index}",
+                    payload_json={},
+                    status="pending",
+                )
+            )
+    first_page = service.review_queue(limit=2, offset=0)["pending"]
+    second_page = service.review_queue(limit=2, offset=2)["pending"]
+    assert {row["id"] for row in first_page}.isdisjoint({row["id"] for row in second_page})
+
+
 def test_the_latest_evaluation_is_grouped_and_drops_bulk_detail(
     factory: sessionmaker[Session], service: CewsReadService
 ) -> None:

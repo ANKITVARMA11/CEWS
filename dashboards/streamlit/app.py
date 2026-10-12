@@ -6,14 +6,24 @@ Run it with:
 
 This file is presentation only. Every number comes from ``cews.dashboard.queries``, which reads
 what the pipeline already computed and stored; nothing is calculated here. Charts are drawn by
-matplotlib and arrive in the browser as images, so the project stays free of JavaScript.
+Plotly and rendered as live, interactive figures (hover, zoom, legend toggling), not static
+images.
 
-Three things are deliberate:
+Four things are deliberate:
 
 * the banner at the top always says whether the figures come from synthetic demo data or real
   collection, because a dashboard that cannot tell you that is one you cannot trust in a meeting;
 * a score is never shown without its confidence and the rules it passed or failed;
-* every screen can be traced back to the source records underneath it.
+* every screen can be traced back to the source records underneath it;
+* the Review page is the one place this dashboard writes anything back to the database - an
+  approve/reject decision on a queued item - and it goes through the exact same
+  ``cews.normalization.review_actions`` functions the CLI's own ``cews review`` command uses, so
+  the two can never disagree about what "approved" means.
+
+The chat widget is not embedded in this page as a floating panel; it opens as its own browser
+tab via Streamlit's own multipage mechanism (``pages/chat.py``, served on this same server and
+port - not a second process) so a long conversation never forces this seven-page dashboard to
+rerun. See ``components/chat_widget.py``.
 """
 
 from __future__ import annotations
@@ -32,7 +42,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:  # so "components" reso
         0, str(Path(__file__).resolve().parent)
     )  # rather than relying on Streamlit's own path setup
 
-from components import chat_widget  # noqa: E402
+from components import chat_widget, review_panel  # noqa: E402
 
 from cews.constants import EntityType, ScoreType  # noqa: E402
 from cews.dashboard import charts, queries  # noqa: E402
@@ -53,6 +63,7 @@ PAGES = (
     "Opportunities",
     "Anomalies",
     "Evidence",
+    "Review",
     "Data sources",
 )
 
@@ -172,7 +183,7 @@ def page_overview() -> None:
     left, right = st.columns([3, 2])
     with left:
         st.markdown("**Topics by trend score**")
-        st.pyplot(
+        st.plotly_chart(
             charts.ranked_bars(
                 [row["entity"] for row in trends[:10]],
                 [row["score"] for row in trends[:10]],
@@ -180,14 +191,21 @@ def page_overview() -> None:
                 xlabel="trend score",
             ),
             width="stretch",
+            theme=None,
+            key="overview_trend_bars",
         )
         st.caption("Blue passed every rule. Grey scored well but did not qualify as a finding.")
     with right:
         st.markdown("**What has been collected**")
-        st.pyplot(charts.records_by_type(summary.records_by_type), width="stretch")
+        st.plotly_chart(
+            charts.records_by_type(summary.records_by_type),
+            width="stretch",
+            theme=None,
+            key="overview_records_by_type",
+        )
 
     st.markdown("**Score against the evidence behind it**")
-    st.pyplot(
+    st.plotly_chart(
         charts.score_against_confidence(
             [row["entity"] for row in trends[:12]],
             [row["score"] for row in trends[:12]],
@@ -196,6 +214,8 @@ def page_overview() -> None:
             confidence_threshold=CONFIDENCE_THRESHOLD,
         ),
         width="stretch",
+        theme=None,
+        key="overview_score_vs_confidence",
     )
     st.caption(
         "A high score on the left of the red line rests on evidence too thin to act on. "
@@ -220,7 +240,7 @@ def page_trends() -> None:
     row = next(item for item in trends if item["entity"] == chosen)
     months, series = _read("monthly_activity", EntityType.TOPIC.value, row["entity_id"])
     forecast = _read("forecast_for", EntityType.TOPIC.value, row["entity_id"]) or {}
-    st.pyplot(
+    st.plotly_chart(
         charts.activity_with_forecast(
             months,
             series,
@@ -232,6 +252,8 @@ def page_trends() -> None:
             model=forecast.get("model", ""),
         ),
         width="stretch",
+        theme=None,
+        key=f"trends_activity_forecast_{row['entity_id']}",
     )
     if forecast:
         metric = forecast.get("metric")
@@ -242,11 +264,13 @@ def page_trends() -> None:
             if metric is not None
             else f"Forecast by {forecast['model']}."
         )
-    st.pyplot(
+    st.plotly_chart(
         charts.component_contributions(
             row["components"], title=f"How the {row['score']:.1f} was reached"
         ),
         width="stretch",
+        theme=None,
+        key=f"trends_components_{row['entity_id']}",
     )
     st.markdown(f"**In words:** {row['explanation']}")
 
@@ -263,7 +287,7 @@ def page_competitors() -> None:
         ["Monitoring priority", "Innovation output", "By therapeutic area"]
     )
     with tab_threat:
-        st.pyplot(
+        st.plotly_chart(
             charts.ranked_bars(
                 [row["entity"] for row in threats],
                 [row["score"] for row in threats],
@@ -271,6 +295,8 @@ def page_competitors() -> None:
                 xlabel="monitoring priority",
             ),
             width="stretch",
+            theme=None,
+            key="competitors_threat_bars",
         )
         _score_table(threats)
         for row in threats[:3]:
@@ -283,7 +309,7 @@ def page_competitors() -> None:
                     )
                 )
     with tab_innovation:
-        st.pyplot(
+        st.plotly_chart(
             charts.ranked_bars(
                 [row["entity"] for row in innovation],
                 [row["score"] for row in innovation],
@@ -291,6 +317,8 @@ def page_competitors() -> None:
                 xlabel="innovation score",
             ),
             width="stretch",
+            theme=None,
+            key="competitors_innovation_bars",
         )
         _score_table(innovation)
     with tab_area:
@@ -327,11 +355,13 @@ def page_opportunities() -> None:
         trend_values.append(trends.get(row["entity_id"], {}).get("score", 0.0))
         sizes.append(float(row["sample_size"]))
         qualified.append(row["qualified"])
-    st.pyplot(
+    st.plotly_chart(
         charts.opportunity_quadrant(
             labels, trend_values, density, sizes=sizes, qualified=qualified
         ),
         width="stretch",
+        theme=None,
+        key="opportunities_quadrant",
     )
     st.caption("Green passed every rule. Bubble size is the weight of evidence behind it.")
     _score_table(opportunities)
@@ -402,7 +432,12 @@ def page_evidence() -> None:
             + ", ".join(name.replace("_", " ") for name in row["unavailable"])
             + ". Their weight was shared across the remaining components."
         )
-    st.pyplot(charts.component_contributions(row["components"]), width="stretch")
+    st.plotly_chart(
+        charts.component_contributions(row["components"]),
+        width="stretch",
+        theme=None,
+        key=f"evidence_components_{entity_type}_{row['entity_id']}",
+    )
     st.markdown("**Components**")
     st.dataframe(
         [
@@ -435,6 +470,19 @@ def page_evidence() -> None:
         width="stretch",
         hide_index=True,
     )
+
+
+def page_review() -> None:
+    st.subheader("Review")
+    st.caption(
+        "Items CEWS was not confident enough to decide on its own: an uncertain organization "
+        "match, a parent/subsidiary question, or an AI-discovered topic candidate. Approving or "
+        "rejecting here calls the exact same code `cews review approve/reject` does. Open "
+        '"Details" on an item to see every field CEWS recorded for it and the actual source '
+        "records behind any organization or topic it names."
+    )
+    _, factory, _ = _session_factory(st.session_state.get("env_file", ""))
+    review_panel.render_review_panel(factory, key_prefix="dash_review")
 
 
 def page_sources() -> None:
@@ -489,6 +537,7 @@ def page_sources() -> None:
 def main() -> None:
     """Draw the dashboard."""
     st.set_page_config(page_title="CEWS", page_icon="🧭", layout="wide")
+    st.markdown(chat_widget.HIDE_NATIVE_PAGE_NAV_CSS, unsafe_allow_html=True)
     st.title("Competitor Early Warning System")
 
     with st.sidebar:
@@ -504,7 +553,7 @@ def main() -> None:
         )
 
     try:
-        _, _, initialized = _session_factory(env_file or "")
+        settings, _, initialized = _session_factory(env_file or "")
     except SettingsError as error:
         st.error(f"Configuration problem: {error}")
         return
@@ -513,7 +562,10 @@ def main() -> None:
         return
 
     _origin_banner()
-    chat_widget.render(env_file)
+    # Start warming the chat agent's runtime (MCP server + tool discovery) now, in the
+    # background, so it is no longer a ~60s cold start the moment someone clicks the chat icon.
+    chat_widget.prewarm(env_file)
+    chat_widget.render_chat_launcher(env_file)
     {
         "Overview": page_overview,
         "Trends": page_trends,
@@ -521,6 +573,7 @@ def main() -> None:
         "Opportunities": page_opportunities,
         "Anomalies": page_anomalies,
         "Evidence": page_evidence,
+        "Review": page_review,
         "Data sources": page_sources,
     }[page]()
 

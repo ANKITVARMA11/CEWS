@@ -71,19 +71,40 @@ def competitor_movement_text(
 
 
 def new_market_entry_text(
-    competitor_name: str, *, area_name: str, records_in_window: int, quiet_months: int
+    competitor_name: str,
+    *,
+    area_name: str,
+    records_in_window: int,
+    quiet_months: int,
+    had_earlier_history: bool = False,
 ) -> InsightText:
-    """A competitor started activity in an area it had no history in."""
+    """A competitor started activity in an area - either for the first time, or again.
+
+    ``had_earlier_history`` matters for the interpretation, not the observed fact: the rule this
+    text describes only checks ``quiet_months`` back (see
+    ``cews.discovery.new_market_entry.MarketEntry``), so it cannot itself tell a genuine first
+    move from an organization resuming work after a long gap. Saying "not a continuation of
+    existing work" regardless used to overclaim exactly that whenever earlier history existed -
+    caught by someone fact-checking a real insight whose own evidence included work from years
+    before the quiet window the claim was about.
+    """
+    if had_earlier_history:
+        interpretation = (
+            f"{competitor_name} is resuming activity in {area_name} after an extended quiet "
+            f"period (at least {quiet_months} months), following earlier work there."
+        )
+    else:
+        interpretation = (
+            f"This is a first move by {competitor_name} into {area_name}, not a continuation of "
+            "existing work there."
+        )
     return InsightText(
         title=f"{competitor_name}: entered {area_name}",
         observed_fact=(
             f"{competitor_name} recorded {records_in_window} record(s) in {area_name} after "
             f"{quiet_months} month(s) with none."
         ),
-        interpretation=(
-            f"This is a first move by {competitor_name} into {area_name}, not a continuation of "
-            "existing work there."
-        ),
+        interpretation=interpretation,
         recommended_review=f"Assess whether {area_name} is a strategic priority and what {competitor_name}'s entry means for it.",
     )
 

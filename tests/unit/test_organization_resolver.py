@@ -227,3 +227,83 @@ def test_statistics_are_reported(session: Session, settings: Settings) -> None:
     stats = resolver.stats.as_dict()
     assert stats["resolved"] == 2 and stats["created"] == 1
     assert sum(stats["by_method"].values()) == 2
+
+
+# --------------------------------------------------------------------------------------
+# A name created by someone else since this resolver's indexes were loaded
+#
+# Seen for real on a live refresh: a long-running normalize committed "Neurocentre" as a new
+# organization; this resolver's own indexes, built once at construction, had no way to know
+# that - so when it independently decided the same name was new, the second INSERT hit the
+# database's own UNIQUE constraint. The crash itself is new ground here (test_data covers
+# everything _by_keys/_by_prefix/_by_fuzzy decide on their own, all without ever reaching the
+# database's constraint); this is the one case the resolver cannot out-think through its
+# indexes alone, because the collision happens outside them.
+# --------------------------------------------------------------------------------------
+def test_a_name_someone_else_already_committed_is_used_instead_of_crashing(
+    session: Session, settings: Settings
+) -> None:
+    resolver = _resolver(session, settings)
+    # simulate another process (or an earlier, uncommitted-to-this-resolver part of the same
+    # run) having already created this organization after `resolver` loaded its indexes
+    session.add(
+        Organization(
+            canonical_name="Neurocentre", normalized_name="neurocentre", organization_type="unknown"
+        )
+    )
+    session.flush()
+
+    from cews.normalization.organizations import normalize_organization_name
+
+    name = normalize_organization_name("Neurocentre")
+    organization = resolver.create_organization(name)
+
+    assert organization.canonical_name == "Neurocentre"
+    rows = session.scalars(
+        select(Organization).where(Organization.canonical_name == "Neurocentre")
+    ).all()
+    assert len(rows) == 1, "a second row must never be created for the same canonical name"
+
+
+def test_after_recovering_from_a_collision_the_organization_is_usable_normally(
+    session: Session, settings: Settings
+) -> None:
+    """The recovered organization is properly remembered, not just returned once: a later,
+    different mention of the same name must resolve back to it via the normal index path."""
+    resolver = _resolver(session, settings)
+    session.add(
+        Organization(
+            canonical_name="Neurocentre", normalized_name="neurocentre", organization_type="unknown"
+        )
+    )
+    session.flush()
+
+    from cews.normalization.organizations import normalize_organization_name
+
+    recovered = resolver.create_organization(normalize_organization_name("Neurocentre"))
+    match = resolver.resolve("Neurocentre")
+
+    assert match is not None
+    assert match.organization.id == recovered.id
+    assert match.method == "exact"
+
+
+def test_a_different_integrity_error_is_not_mistaken_for_a_name_collision(
+    session: Session, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recovery path is specifically about organizations.canonical_name; some other
+    constraint failing during this same flush must still raise, not be silently swallowed."""
+    from sqlalchemy.exc import IntegrityError
+
+    from cews.normalization.organizations import normalize_organization_name
+
+    resolver = _resolver(session, settings)
+
+    def broken_flush(*_a: object, **_k: object) -> None:
+        raise IntegrityError(
+            "INSERT", {}, Exception("NOT NULL constraint failed: organizations.organization_type")
+        )
+
+    monkeypatch.setattr(session, "flush", broken_flush)
+    with pytest.raises(IntegrityError):
+        resolver.create_organization(normalize_organization_name("Brand New Co"))

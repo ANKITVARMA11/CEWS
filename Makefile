@@ -80,7 +80,7 @@ scheduler: ## Start the background scheduler
 api: ## Start the FastAPI service
 	$(PYTHON) -m uvicorn cews.api.app:app --reload
 
-dashboard: ## Start the Streamlit dashboard
+dashboard: ## Start the Streamlit dashboard (the chat tab lives on this same process/port now)
 	$(PYTHON) -m streamlit run dashboards/streamlit/app.py
 
 demo: db-init seed analyze ai evaluate export ## Run the offline demo pipeline on synthetic data

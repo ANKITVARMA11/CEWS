@@ -1,10 +1,12 @@
-"""Charts, drawn server-side as images.
+"""Charts, drawn as interactive Plotly figures.
 
-Everything here is matplotlib, rendered to a picture before it reaches the browser. No charting
-library runs in the page, which keeps the whole project free of JavaScript we would have to
-maintain.
+Everything here is Plotly (``plotly.graph_objects``), rendered with ``st.plotly_chart`` so a
+person can hover a point for its exact value, zoom into a crowded cluster, or toggle a legend
+entry — none of which a static image can offer. This replaced an earlier matplotlib version that
+rendered every chart as a picture; the data contract (what each function takes and what it is
+meant to show) is unchanged, only the figure object itself is now a ``go.Figure``.
 
-Three habits run through the charts:
+Three habits run through the charts, unchanged from before:
 
 * **Uncertainty is drawn, not implied.** A forecast is shown with its interval, so nobody reads
   a single line as a promise.
@@ -20,12 +22,7 @@ import logging
 from collections.abc import Sequence
 from datetime import date
 
-import matplotlib
-
-matplotlib.use("Agg")  # render to an image; never open a window
-import matplotlib.dates as mdates  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.figure import Figure  # noqa: E402
+import plotly.graph_objects as go
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,33 +36,81 @@ RED = "#D55E00"
 PURPLE = "#CC79A7"
 BACKGROUND = "#FFFFFF"
 GRID = "#E6E6E6"
+# Explicit dark text, set on every figure's layout and axes below. `st.plotly_chart` defaults to
+# `theme="streamlit"`, which re-themes a figure's text to match the app's active light/dark
+# theme and will turn this white again under a dark browser/OS theme even though our background
+# stays the fixed white set above - that is what caused "white text on white background." Every
+# `st.plotly_chart(...)` call in the dashboard now passes `theme=None` to stop that re-theming;
+# setting the colour explicitly here too is defense-in-depth in case a figure is ever rendered
+# somewhere that still applies a theme.
+TEXT = "#1A1A1A"
 
-BASE_SIZE = (9.0, 4.0)
-
-
-def _style(figure: Figure) -> None:
-    for axes in figure.axes:
-        axes.set_facecolor(BACKGROUND)
-        axes.grid(True, color=GRID, linewidth=0.8, zorder=0)
-        axes.set_axisbelow(True)
-        for side in ("top", "right"):
-            axes.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            axes.spines[side].set_color(GREY)
-    figure.patch.set_facecolor(BACKGROUND)
-    figure.tight_layout()
+BASE_HEIGHT = 360
 
 
-def empty_chart(message: str, *, size: tuple[float, float] = BASE_SIZE) -> Figure:
+def _style(figure: go.Figure, *, title: str = "", height: int | None = None) -> go.Figure:
+    """Shared layout: a plain white background, a light grid, no chrome Plotly adds by default."""
+    figure.update_layout(
+        title=(
+            dict(text=title, x=0.0, xanchor="left", font=dict(size=14, color=TEXT))
+            if title
+            else None
+        ),
+        paper_bgcolor=BACKGROUND,
+        plot_bgcolor=BACKGROUND,
+        font=dict(color=TEXT),
+        height=height or BASE_HEIGHT,
+        # These are a floor, not the final margin: `automargin=True` below lets Plotly grow past
+        # them to fit an axis title or long tick labels. A fixed, too-tight margin (10px on every
+        # side, as this used to be) is what clipped axis titles like "trend score" or long
+        # competitor names off the edge of the chart - fine for a short label, not for a long one.
+        margin=dict(l=10, r=10, t=40 if title else 10, b=10),
+        hovermode="closest",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0.0, font=dict(color=TEXT)
+        ),
+    )
+    figure.update_xaxes(
+        gridcolor=GRID,
+        zeroline=False,
+        color=TEXT,
+        tickfont=dict(color=TEXT),
+        title_font=dict(color=TEXT),
+        automargin=True,
+    )
+    figure.update_yaxes(
+        gridcolor=GRID,
+        zeroline=False,
+        color=TEXT,
+        tickfont=dict(color=TEXT),
+        title_font=dict(color=TEXT),
+        automargin=True,
+    )
+    return figure
+
+
+def empty_chart(message: str, *, height: int = BASE_HEIGHT) -> go.Figure:
     """A chart that says why it has nothing to show, rather than an empty frame."""
-    figure, axes = plt.subplots(figsize=size)
-    axes.text(0.5, 0.5, message, ha="center", va="center", color=GREY, fontsize=11, wrap=True)
-    axes.set_xticks([])
-    axes.set_yticks([])
-    for side in ("top", "right", "left", "bottom"):
-        axes.spines[side].set_visible(False)
-    figure.patch.set_facecolor(BACKGROUND)
-    figure.tight_layout()
+    figure = go.Figure()
+    figure.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font=dict(size=13, color=GREY),
+        align="center",
+    )
+    figure.update_xaxes(visible=False)
+    figure.update_yaxes(visible=False)
+    figure.update_layout(
+        paper_bgcolor=BACKGROUND,
+        plot_bgcolor=BACKGROUND,
+        font=dict(color=TEXT),
+        height=height,
+        margin=dict(t=10, b=10),
+    )
     return figure
 
 
@@ -79,68 +124,61 @@ def activity_with_forecast(
     upper: Sequence[float] = (),
     title: str = "",
     model: str = "",
-    size: tuple[float, float] = BASE_SIZE,
-) -> Figure:
+    height: int = BASE_HEIGHT,
+) -> go.Figure:
     """Monthly activity, with the forecast and its interval if there is one.
 
     The interval is shaded rather than drawn as lines, so the eye reads a range instead of three
-    competing predictions.
+    competing predictions. Hovering any point shows its exact month and value.
     """
     if not months:
-        return empty_chart("No activity recorded for this entity yet", size=size)
-    # Dates are turned into plot numbers explicitly; the axis formatters below turn them back
-    # into month labels.
-    observed_x = [float(mdates.date2num(month)) for month in months]
-    figure, axes = plt.subplots(figsize=size)
-    axes.plot(
-        observed_x,
-        [float(value) for value in observed],
-        color=BLUE,
-        linewidth=2.0,
-        marker="o",
-        markersize=3,
-        label="recorded",
-        zorder=3,
+        return empty_chart("No activity recorded for this entity yet", height=height)
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=list(months),
+            y=[float(value) for value in observed],
+            mode="lines+markers",
+            name="recorded",
+            line=dict(color=BLUE, width=2),
+            marker=dict(size=5),
+            hovertemplate="%{x|%b %Y}: %{y:.0f} records<extra></extra>",
+        )
     )
 
     if forecast_months and predicted:
         # Join the forecast to the last observed point so the line is not left floating.
-        forecast_x = [float(mdates.date2num(month)) for month in forecast_months]
-        bridge_x = [observed_x[-1], *forecast_x]
-        bridge_values = [float(observed[-1]), *[float(value) for value in predicted]]
-        axes.plot(
-            bridge_x,
-            bridge_values,
-            color=ORANGE,
-            linewidth=2.0,
-            linestyle="--",
-            marker="s",
-            markersize=3,
-            label=f"forecast ({model})" if model else "forecast",
-            zorder=3,
+        bridge_x = [months[-1], *forecast_months]
+        bridge_y = [float(observed[-1]), *[float(value) for value in predicted]]
+        label = f"forecast ({model})" if model else "forecast"
+        figure.add_trace(
+            go.Scatter(
+                x=bridge_x,
+                y=bridge_y,
+                mode="lines+markers",
+                name=label,
+                line=dict(color=ORANGE, width=2, dash="dash"),
+                marker=dict(size=5, symbol="square"),
+                hovertemplate="%{x|%b %Y}: %{y:.0f} (forecast)<extra></extra>",
+            )
         )
         if lower and upper:
-            axes.fill_between(
-                forecast_x,
-                [float(value) for value in lower],
-                [float(value) for value in upper],
-                color=ORANGE,
-                alpha=0.18,
-                label="likely range",
-                zorder=1,
+            figure.add_trace(
+                go.Scatter(
+                    x=[*forecast_months, *forecast_months[::-1]],
+                    y=[*[float(v) for v in upper], *[float(v) for v in lower][::-1]],
+                    fill="toself",
+                    fillcolor="rgba(230, 159, 0, 0.18)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="likely range",
+                    hoverinfo="skip",
+                )
             )
-        axes.axvline(observed_x[-1], color=GREY, linewidth=1.0, linestyle=":", zorder=2)
+        figure.add_vline(x=months[-1], line=dict(color=GREY, width=1, dash="dot"))
 
-    axes.set_ylabel("records per month")
-    axes.set_ylim(bottom=0)
-    axes.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-    axes.xaxis.set_major_locator(mdates.MonthLocator(interval=max(1, len(months) // 8)))
-    figure.autofmt_xdate(rotation=45, ha="right")
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    axes.legend(frameon=False, fontsize=9, loc="upper left")
-    _style(figure)
-    return figure
+    figure.update_yaxes(title_text="records per month", rangemode="tozero")
+    figure.update_xaxes(tickformat="%b %Y")
+    return _style(figure, title=title, height=height)
 
 
 def ranked_bars(
@@ -150,8 +188,8 @@ def ranked_bars(
     highlight: Sequence[bool] = (),
     title: str = "",
     xlabel: str = "score",
-    size: tuple[float, float] | None = None,
-) -> Figure:
+    height: int | None = None,
+) -> go.Figure:
     """A ranked horizontal bar chart, highest at the top.
 
     ``highlight`` marks the entries that passed every rule; the rest are drawn in grey, so the
@@ -159,32 +197,24 @@ def ranked_bars(
     """
     if not labels:
         return empty_chart("Nothing to rank yet")
-    height = size or (9.0, max(2.4, 0.42 * len(labels) + 1.0))
-    figure, axes = plt.subplots(figsize=height)
-    order = list(range(len(labels)))[::-1]  # highest at the top
     marks = list(highlight) + [False] * (len(labels) - len(highlight))
-    colours = [BLUE if marks[index] else GREY for index in order]
-    axes.barh(
-        [labels[index] for index in order],
-        [values[index] for index in order],
-        color=colours,
-        zorder=3,
-    )
-    for position, index in enumerate(order):
-        axes.text(
-            values[index] + 1.0,
-            position,
-            f"{values[index]:.0f}",
-            va="center",
-            fontsize=9,
-            color=GREY,
+    colours = [BLUE if mark else GREY for mark in marks]
+    # Plotly draws the first category at the bottom of a horizontal bar chart, so the input is
+    # reversed up front to put the highest value at the top, matching the old chart's layout.
+    order = list(range(len(labels)))[::-1]
+    figure = go.Figure(
+        go.Bar(
+            x=[values[index] for index in order],
+            y=[labels[index] for index in order],
+            orientation="h",
+            marker=dict(color=[colours[index] for index in order]),
+            text=[f"{values[index]:.0f}" for index in order],
+            textposition="outside",
+            hovertemplate="%{y}: %{x:.1f}<extra></extra>",
         )
-    axes.set_xlabel(xlabel)
-    axes.set_xlim(0, max(105.0, max(values) * 1.15))
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    _style(figure)
-    return figure
+    )
+    figure.update_xaxes(title_text=xlabel, range=[0, max(105.0, max(values) * 1.15)])
+    return _style(figure, title=title, height=height or max(240, int(42 * len(labels)) + 80))
 
 
 def score_against_confidence(
@@ -195,47 +225,46 @@ def score_against_confidence(
     sizes: Sequence[float] = (),
     confidence_threshold: float = 60.0,
     title: str = "",
-    size: tuple[float, float] = (9.0, 5.0),
-) -> Figure:
+    height: int = 420,
+) -> go.Figure:
     """Score against confidence, which is the chart that stops a number being believed too easily.
 
     Anything to the left of the threshold line scores well on evidence that does not support it.
     """
     if not labels:
-        return empty_chart("No scores to plot yet", size=size)
-    figure, axes = plt.subplots(figsize=size)
+        return empty_chart("No scores to plot yet", height=height)
     bubble = list(sizes) or [40.0] * len(labels)
     largest = max(bubble) or 1.0
-    areas = [40.0 + 260.0 * (value / largest) for value in bubble]
+    diameters = [12.0 + 34.0 * (value / largest) ** 0.5 for value in bubble]
     colours = [BLUE if value >= confidence_threshold else RED for value in confidences]
-    axes.scatter(confidences, scores, s=areas, c=colours, alpha=0.75, edgecolor="white", zorder=3)
-    for label, x, y in zip(labels, confidences, scores, strict=True):
-        axes.annotate(
-            label[:26], (x, y), fontsize=8, xytext=(6, 4), textcoords="offset points", color=GREY
+    figure = go.Figure(
+        go.Scatter(
+            x=list(confidences),
+            y=list(scores),
+            mode="markers+text",
+            text=[label[:26] for label in labels],
+            textposition="top center",
+            textfont=dict(size=9, color=GREY),
+            marker=dict(
+                size=diameters, color=colours, opacity=0.8, line=dict(color="white", width=1)
+            ),
+            customdata=list(zip(labels, bubble, strict=True)),
+            hovertemplate="%{customdata[0]}<br>score %{y:.1f}, confidence %{x:.1f}"
+            "<br>%{customdata[1]:.0f} records<extra></extra>",
         )
-    axes.axvline(
-        confidence_threshold,
-        color=RED,
-        linewidth=1.2,
-        linestyle="--",
-        zorder=2,
     )
-    axes.text(
-        confidence_threshold - 1,
-        102,
-        "not enough evidence to act on",
-        fontsize=9,
-        color=RED,
-        ha="right",
+    figure.add_vline(x=confidence_threshold, line=dict(color=RED, width=1.5, dash="dash"))
+    figure.add_annotation(
+        x=confidence_threshold - 1,
+        y=102,
+        text="not enough evidence to act on",
+        showarrow=False,
+        font=dict(size=11, color=RED),
+        xanchor="right",
     )
-    axes.set_xlabel("confidence")
-    axes.set_ylabel("score")
-    axes.set_xlim(0, 105)
-    axes.set_ylim(0, 108)
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    _style(figure)
-    return figure
+    figure.update_xaxes(title_text="confidence", range=[0, 105])
+    figure.update_yaxes(title_text="score", range=[0, 108])
+    return _style(figure, title=title, height=height)
 
 
 def opportunity_quadrant(
@@ -246,48 +275,66 @@ def opportunity_quadrant(
     sizes: Sequence[float] = (),
     qualified: Sequence[bool] = (),
     title: str = "",
-    size: tuple[float, float] = (9.0, 5.5),
-) -> Figure:
+    height: int = 460,
+) -> go.Figure:
     """Growth against how crowded the field is, with the open-and-growing corner marked.
 
     Bubble size is the weight of evidence, so a tempting position built on very little is
     visibly small.
     """
     if not labels:
-        return empty_chart("No topics to place yet", size=size)
-    figure, axes = plt.subplots(figsize=size)
+        return empty_chart("No topics to place yet", height=height)
     bubble = list(sizes) or [40.0] * len(labels)
     largest = max(bubble) or 1.0
-    areas = [40.0 + 300.0 * (value / largest) for value in bubble]
+    diameters = [12.0 + 36.0 * (value / largest) ** 0.5 for value in bubble]
     marks = list(qualified) + [False] * (len(labels) - len(qualified))
     colours = [GREEN if mark else GREY for mark in marks]
-    axes.axhspan(60, 105, xmin=0.0, xmax=0.4, color=GREEN, alpha=0.06, zorder=0)
-    axes.scatter(
-        competition, trend_scores, s=areas, c=colours, alpha=0.8, edgecolor="white", zorder=3
+    figure = go.Figure()
+    figure.add_shape(
+        type="rect",
+        x0=0,
+        x1=40,
+        y0=60,
+        y1=105,
+        fillcolor=GREEN,
+        opacity=0.06,
+        line=dict(width=0),
+        layer="below",
     )
-    for label, x, y in zip(labels, competition, trend_scores, strict=True):
-        axes.annotate(
-            label[:24], (x, y), fontsize=8, xytext=(6, 4), textcoords="offset points", color=GREY
+    figure.add_trace(
+        go.Scatter(
+            x=list(competition),
+            y=list(trend_scores),
+            mode="markers+text",
+            text=[label[:24] for label in labels],
+            textposition="top center",
+            textfont=dict(size=9, color=GREY),
+            marker=dict(
+                size=diameters, color=colours, opacity=0.85, line=dict(color="white", width=1)
+            ),
+            customdata=list(zip(labels, bubble, strict=True)),
+            hovertemplate="%{customdata[0]}<br>trend %{y:.1f}, crowding %{x:.1f}"
+            "<br>%{customdata[1]:.0f} records<extra></extra>",
         )
-    axes.axhline(60, color=GREY, linewidth=1.0, linestyle=":", zorder=2)
-    axes.axvline(40, color=GREY, linewidth=1.0, linestyle=":", zorder=2)
-    axes.text(2, 101, "growing, few competitors", fontsize=9, color=GREEN)
-    axes.set_xlabel("how crowded the field is")
-    axes.set_ylabel("trend score")
-    axes.set_xlim(0, 105)
-    axes.set_ylim(0, 108)
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    _style(figure)
-    return figure
+    )
+    figure.add_hline(y=60, line=dict(color=GREY, width=1, dash="dot"))
+    figure.add_vline(x=40, line=dict(color=GREY, width=1, dash="dot"))
+    figure.add_annotation(
+        x=2,
+        y=101,
+        text="growing, few competitors",
+        showarrow=False,
+        font=dict(size=11, color=GREEN),
+        xanchor="left",
+    )
+    figure.update_xaxes(title_text="how crowded the field is", range=[0, 105])
+    figure.update_yaxes(title_text="trend score", range=[0, 108])
+    return _style(figure, title=title, height=height)
 
 
 def component_contributions(
-    components: dict[str, dict[str, float]],
-    *,
-    title: str = "",
-    size: tuple[float, float] = (9.0, 3.2),
-) -> Figure:
+    components: dict[str, dict[str, float]], *, title: str = "", height: int = 220
+) -> go.Figure:
     """What each part contributed to one score, so the total can be checked by eye."""
     usable = {
         name: detail
@@ -295,60 +342,48 @@ def component_contributions(
         if detail.get("available") and detail.get("weight")
     }
     if not usable:
-        return empty_chart("This score has no weighted components", size=size)
+        return empty_chart("This score has no weighted components", height=height)
     names = list(usable)
     values = [float(usable[name].get("contribution", 0.0)) for name in names]
-    figure, axes = plt.subplots(figsize=size)
-    left = 0.0
     palette = [BLUE, ORANGE, GREEN, PURPLE, GREY]
+    figure = go.Figure()
     for index, (name, value) in enumerate(zip(names, values, strict=True)):
-        axes.barh([0], [value], left=[left], color=palette[index % len(palette)], zorder=3)
-        if value > 4:
-            axes.text(
-                left + value / 2,
-                0,
-                f"{name.replace('_', ' ')}\n{value:.1f}",
-                ha="center",
-                va="center",
-                fontsize=8,
-                color="white",
+        figure.add_trace(
+            go.Bar(
+                x=[value],
+                y=[""],
+                orientation="h",
+                name=name.replace("_", " "),
+                marker=dict(color=palette[index % len(palette)]),
+                text=[f"{name.replace('_', ' ')} {value:.1f}"] if value > 4 else [""],
+                textposition="inside",
+                insidetextfont=dict(color="white", size=10),
+                hovertemplate=f"{name.replace('_', ' ')}: %{{x:.1f}}<extra></extra>",
             )
-        left += value
-    axes.set_yticks([])
-    axes.set_xlim(0, max(100.0, left * 1.05))
-    axes.set_xlabel(f"points contributed (total {left:.1f})")
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    _style(figure)
-    return figure
+        )
+    total = sum(values)
+    figure.update_layout(barmode="stack", showlegend=False)
+    figure.update_xaxes(
+        title_text=f"points contributed (total {total:.1f})", range=[0, max(100.0, total * 1.05)]
+    )
+    figure.update_yaxes(visible=False)
+    return _style(figure, title=title, height=height)
 
 
-def records_by_type(
-    counts: dict[str, int], *, title: str = "", size: tuple[float, float] = (9.0, 3.0)
-) -> Figure:
+def records_by_type(counts: dict[str, int], *, title: str = "", height: int = 260) -> go.Figure:
     """How much of each kind of record has been collected."""
     if not counts:
-        return empty_chart("No records collected yet", size=size)
+        return empty_chart("No records collected yet", height=height)
     names = sorted(counts, key=lambda name: counts[name], reverse=True)
-    figure, axes = plt.subplots(figsize=size)
-    axes.bar(
-        [name.replace("_", " ") for name in names],
-        [counts[name] for name in names],
-        color=BLUE,
-        zorder=3,
-    )
-    for index, name in enumerate(names):
-        axes.text(
-            index,
-            counts[name],
-            f"{counts[name]:,}",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-            color=GREY,
+    figure = go.Figure(
+        go.Bar(
+            x=[name.replace("_", " ") for name in names],
+            y=[counts[name] for name in names],
+            marker=dict(color=BLUE),
+            text=[f"{counts[name]:,}" for name in names],
+            textposition="outside",
+            hovertemplate="%{x}: %{y:,}<extra></extra>",
         )
-    axes.set_ylabel("records")
-    if title:
-        axes.set_title(title, loc="left", fontsize=12)
-    _style(figure)
-    return figure
+    )
+    figure.update_yaxes(title_text="records")
+    return _style(figure, title=title, height=height)

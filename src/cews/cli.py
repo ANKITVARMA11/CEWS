@@ -1567,6 +1567,40 @@ def cmd_agent(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_crew(args: argparse.Namespace) -> int:
+    """Run a multi-agent CrewAI crew: several agents collaborating over the MCP server.
+
+    Unlike `cews agent`, which answers one question with one persona, a crew's agents hand work
+    to each other automatically - the Researcher's findings become the Fact-checker's input,
+    and both become the Writer's. Needs `pip install -r requirements-crew.txt` on top of the
+    MCP extras, and an LLM configured the same as `cews agent`.
+    """
+    settings = _load(args)
+    from cews.ai.llm import llm_enabled
+
+    if not llm_enabled(settings):
+        print("no LLM is configured (LLM_PROVIDER=none); set LLM_PROVIDER and LLM_MODEL in .env")
+        return EXIT_FAILURE
+    engine = _engine(settings)
+    if not database_is_initialized(engine):
+        print("database not initialized; run db-init first")
+        return EXIT_FAILURE
+
+    try:
+        from cews.crew.briefing import run_briefing_crew
+    except ImportError:
+        print("crewai is not installed; run: pip install -r requirements-crew.txt")
+        return EXIT_FAILURE
+
+    try:
+        result = run_briefing_crew(settings, args.env_file, verbose=args.verbose)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return EXIT_FAILURE
+    print(result)
+    return EXIT_OK
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """List review items, or approve/reject one by id."""
     from cews.normalization.review_actions import (
@@ -1923,6 +1957,14 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("arg", nargs="?", help="the question (ask) or insight id (verify)")
     agent.add_argument("--json", action="store_true", help="print the full result as JSON")
     agent.set_defaults(func=cmd_agent)
+
+    crew = sub.add_parser(
+        "crew",
+        parents=[common],
+        help="run a multi-agent CrewAI crew that collaborates over the MCP server",
+    )
+    crew.add_argument("name", nargs="?", default="brief", choices=("brief",))
+    crew.set_defaults(func=cmd_crew)
 
     review = sub.add_parser(
         "review", parents=[common], help="show, approve or reject items awaiting human review"

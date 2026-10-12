@@ -30,6 +30,7 @@ from cews.constants import EntityType, ScoreType
 from cews.dashboard import queries
 from cews.database.connection import session_scope
 from cews.database.models import Insight, InsightEvidence, ReviewQueueItem, SourceRecord
+from cews.normalization.review_actions import pending_review_count
 from cews.scoring.config import load_scoring_config
 from cews.settings import Settings
 from cews.validation.data_quality import run_data_quality_checks
@@ -426,26 +427,48 @@ class CewsReadService:
 
         return self._run(body)
 
-    def review_queue(self, limit: int = 20) -> dict[str, Any]:
-        """Decisions waiting for a person. Read-only: approving happens with ``cews review``."""
+    def review_queue(self, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        """Decisions waiting for a person. Read-only: approving happens with ``cews review`` or
+        the dashboard's Review page - never through this tool.
+
+        ``total_pending`` is the real count of everything waiting, independent of ``limit`` -
+        read that for "how many are left", never ``len(pending)``, which is only ever this one
+        page. A real pipeline that has run for a while can leave far more pending than any one
+        page shows (confirmed on a real database: the page defaults to 20, the queue itself held
+        over 100,000), and a page's own size being mistaken for the total is exactly the
+        confusion this field exists to prevent.
+        """
+        page_size = clamp(limit, default=20)
 
         def body(session: Session) -> dict[str, Any]:
+            total = pending_review_count(session)
             rows = session.scalars(
                 select(ReviewQueueItem)
                 .where(ReviewQueueItem.status == "pending")
                 .order_by(ReviewQueueItem.created_at.desc())
-                .limit(clamp(limit, default=20))
+                .offset(max(offset, 0))
+                .limit(page_size)
             )
+            pending = [
+                {
+                    "id": row.id,
+                    "kind": row.queue_type,
+                    "subject": clean_text(str(row.subject_ref)),
+                    "detail": jsonable(row.payload_json or {}),
+                }
+                for row in rows
+            ]
             return {
-                "pending": [
-                    {
-                        "id": row.id,
-                        "kind": row.queue_type,
-                        "subject": clean_text(str(row.subject_ref)),
-                        "detail": jsonable(row.payload_json or {}),
-                    }
-                    for row in rows
-                ]
+                "total_pending": total,
+                "returned": len(pending),
+                "offset": max(offset, 0),
+                "note": (
+                    f"showing {len(pending)} of {total} pending item(s), starting at offset "
+                    f"{max(offset, 0)}; pass a larger `offset` to page through the rest"
+                    if total > len(pending)
+                    else f"showing all {total} pending item(s)"
+                ),
+                "pending": pending,
             }
 
         return self._run(body, untrusted=True)

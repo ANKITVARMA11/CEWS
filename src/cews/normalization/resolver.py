@@ -26,6 +26,7 @@ from typing import Any
 
 from rapidfuzz import fuzz, process
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cews.constants import OrganizationType
@@ -407,7 +408,20 @@ class OrganizationResolver:
         discovered: bool = True,
         synthetic: bool = False,
     ) -> Organization:
-        """Create an organization from a normalized name and index it."""
+        """Create an organization from a normalized name and index it.
+
+        This resolver's own in-memory indexes are checked before this is ever called, so under
+        normal conditions the name really is new. But those indexes are built once, at
+        construction (``_load``), from whatever was committed *then* - they do not see another
+        process's commits made since. On a long run processing many thousands of records this is
+        rare but real: this exact collision happened on real data, another record (processed
+        earlier in the same run, or by a different run entirely) having already committed the
+        identical canonical name between this resolver's load and this call. Rather than letting
+        that surface as a raw IntegrityError - which aborts the flush, leaves the session unusable
+        until a rollback, and previously took the rest of the batch down with it - a collision
+        here is treated the same as finding the name already existed: flush inside a SAVEPOINT so
+        only this one insert's failure needs undoing, then look the real row up and use it.
+        """
         classification = classify_organization_type(name.original)
         organization = Organization(
             canonical_name=name.original[:255],
@@ -417,8 +431,27 @@ class OrganizationResolver:
             is_synthetic=synthetic,
             created_at=datetime.now(UTC),
         )
-        self.session.add(organization)
-        self.session.flush()
+        try:
+            with self.session.begin_nested():
+                self.session.add(organization)
+                self.session.flush()
+        except IntegrityError as exc:
+            if "organizations.canonical_name" not in str(exc.orig):
+                raise  # a different integrity problem; do not mask it as a name collision
+            LOGGER.warning(
+                "organization %r was created elsewhere since this run started; using it "
+                "instead of failing this record",
+                organization.canonical_name,
+            )
+            existing = self.session.scalar(
+                select(Organization).where(
+                    Organization.canonical_name == organization.canonical_name
+                )
+            )
+            if existing is None:  # pragma: no cover - would mean the row vanished between
+                raise  # the failed insert and this lookup; nothing sensible to recover to
+            self._remember(existing)
+            return existing
         self._remember(organization)
         self.stats.created += 1
         LOGGER.debug(

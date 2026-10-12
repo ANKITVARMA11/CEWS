@@ -14,8 +14,10 @@ from cews.database.models import ReviewQueueItem, Topic
 from cews.normalization.review_actions import (
     ReviewActionError,
     approve_review_item,
+    pending_review_count,
     pending_review_items,
     reject_review_item,
+    review_queue_types,
 )
 
 pytestmark = pytest.mark.unit
@@ -231,3 +233,81 @@ def test_pending_review_items_respects_the_limit(factory: sessionmaker[Session])
         session.flush()
     with session_scope(factory) as session:
         assert len(pending_review_items(session, limit=3)) == 3
+
+
+# --------------------------------------------------------------------------------------
+# The true, unbounded total - the whole point of this is that it must never equal just
+# `len(pending_review_items(..., limit=...))`, the mistake that once made the Review page, the
+# Overview page and the chat agent all report a different number of pending items.
+# --------------------------------------------------------------------------------------
+def test_pending_review_count_is_not_capped_by_a_page_size(
+    factory: sessionmaker[Session],
+) -> None:
+    with session_scope(factory) as session:
+        for index in range(7):
+            session.add(
+                ReviewQueueItem(
+                    queue_type="organization_parent",
+                    subject_ref=f"pair-{index}",
+                    payload_json={"organizations": [f"A{index}", f"B{index}"]},
+                    status="pending",
+                )
+            )
+        session.flush()
+    with session_scope(factory) as session:
+        assert pending_review_count(session) == 7
+        assert len(pending_review_items(session, limit=3)) == 3
+
+
+def test_pending_review_count_excludes_resolved_items(factory: sessionmaker[Session]) -> None:
+    with session_scope(factory) as session:
+        _candidate_topic(session)
+        org_item = _org_item(session)
+        reject_review_item(session, org_item.id)
+    with session_scope(factory) as session:
+        assert pending_review_count(session) == 1
+
+
+def test_pending_review_count_can_be_filtered_by_queue_type(
+    factory: sessionmaker[Session],
+) -> None:
+    with session_scope(factory) as session:
+        _candidate_topic(session)
+        _org_item(session)
+    with session_scope(factory) as session:
+        assert pending_review_count(session, queue_type="ai_topic_candidate") == 1
+        assert pending_review_count(session, queue_type="organization_parent") == 1
+        assert pending_review_count(session) == 2
+
+
+def test_pending_review_items_offset_pages_through_the_queue(
+    factory: sessionmaker[Session],
+) -> None:
+    with session_scope(factory) as session:
+        for index in range(5):
+            session.add(
+                ReviewQueueItem(
+                    queue_type="organization_parent",
+                    subject_ref=f"pair-{index}",
+                    payload_json={"organizations": [f"A{index}", f"B{index}"]},
+                    status="pending",
+                )
+            )
+        session.flush()
+    with session_scope(factory) as session:
+        first_page = pending_review_items(session, limit=2, offset=0)
+        second_page = pending_review_items(session, limit=2, offset=2)
+        assert len(first_page) == 2
+        assert len(second_page) == 2
+        assert {item.id for item in first_page}.isdisjoint({item.id for item in second_page})
+
+
+def test_review_queue_types_lists_only_pending_kinds(factory: sessionmaker[Session]) -> None:
+    with session_scope(factory) as session:
+        _candidate_topic(session)
+        org_item = _org_item(session)
+        reject_review_item(session, org_item.id)
+    with session_scope(factory) as session:
+        # the rejected organization_parent item must not make its kind show up as a filter
+        # choice - there is nothing of that kind left to filter for.
+        assert review_queue_types(session) == ["ai_topic_candidate"]

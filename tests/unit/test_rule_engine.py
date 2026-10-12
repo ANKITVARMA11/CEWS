@@ -288,6 +288,114 @@ def test_a_genuine_first_move_into_a_topic_is_found(factory: sessionmaker[Sessio
     assert candidates[0].confidence == 100.0
 
 
+def test_evidence_for_a_new_entry_does_not_leak_records_from_an_unrelated_topic(
+    factory: sessionmaker[Session],
+) -> None:
+    """Regression: the organization's evidence used to be pulled with no topic filter at all,
+    so a new-market-entry claim about one topic could be handed evidence records that were
+    really about something else the organization does - unfalsifiable from the evidence
+    alone, since nothing in it says which topic each record belongs to. Caught fact-checking a
+    real insight, not found by inspection."""
+    from cews.database.models import RecordOrganization, RecordTopic, SourceRecord
+
+    with session_scope(factory) as session:
+        entered = _topic(session, "Neurodegeneration")
+        unrelated = _topic(session, "Oncology")
+        organization = _organization(session, "Zentavia Pharma")
+
+        def record(identifier: str, topic: Topic) -> SourceRecord:
+            rec = SourceRecord(
+                source="test",
+                source_record_id=identifier,
+                record_type="publication",
+                fetched_at=datetime(2026, 7, 1, tzinfo=UTC),
+                published_at=datetime(2026, 7, 1, tzinfo=UTC),
+                content_hash=f"{identifier:0>64}"[:64],
+            )
+            session.add(rec)
+            session.flush()
+            session.add(RecordTopic(source_record_id=rec.id, topic_id=topic.id, confidence=1.0))
+            session.add(
+                RecordOrganization(
+                    source_record_id=rec.id,
+                    organization_id=organization.id,
+                    relationship_type="sponsor",
+                    confidence=1.0,
+                )
+            )
+            session.flush()
+            return rec
+
+        on_topic = {record("entered1", entered).id, record("entered2", entered).id}
+        off_topic = {record("unrelated1", unrelated).id, record("unrelated2", unrelated).id}
+        _add_activity(session, organization.id, entered.id, date(2026, 3, 1), 13)
+
+        candidates = find_new_market_entries(
+            session, SCORE_DATE, {(EntityType.COMPETITOR.value, organization.id): "Zentavia Pharma"}
+        )
+
+    assert len(candidates) == 1
+    evidence = set(candidates[0].evidence_record_ids)
+    assert evidence == on_topic, f"leaked unrelated-topic record(s): {evidence & off_topic}"
+
+
+def test_evidence_for_a_new_entry_does_not_include_records_from_before_the_window(
+    factory: sessionmaker[Session],
+) -> None:
+    """The other half of the same real-world case: a record genuinely in the right topic, but
+    from years before the window the "records_in_window" count describes, must not appear as
+    evidence for that count either."""
+    from cews.database.models import RecordOrganization, RecordTopic, SourceRecord
+
+    with session_scope(factory) as session:
+        entered = _topic(session, "Cancer Vaccines")
+        organization = _organization(session, "Suzhou Abogen")
+
+        def record(identifier: str, published: datetime) -> SourceRecord:
+            rec = SourceRecord(
+                source="test",
+                source_record_id=identifier,
+                record_type="publication",
+                fetched_at=published,
+                published_at=published,
+                content_hash=f"{identifier:0>64}"[:64],
+            )
+            session.add(rec)
+            session.flush()
+            session.add(RecordTopic(source_record_id=rec.id, topic_id=entered.id, confidence=1.0))
+            session.add(
+                RecordOrganization(
+                    source_record_id=rec.id,
+                    organization_id=organization.id,
+                    relationship_type="sponsor",
+                    confidence=1.0,
+                )
+            )
+            session.flush()
+            return rec
+
+        old = record("old1", datetime(2023, 10, 18, tzinfo=UTC)).id
+        in_window = {
+            record("w1", datetime(2026, 3, 6, tzinfo=UTC)).id,
+            record("w2", datetime(2026, 5, 13, tzinfo=UTC)).id,
+            record("w3", datetime(2026, 7, 2, tzinfo=UTC)).id,
+        }
+        _add_activity(session, organization.id, entered.id, date(2023, 10, 1), 1)
+        _add_activity(session, organization.id, entered.id, date(2026, 3, 1), 3)
+
+        candidates = find_new_market_entries(
+            session, SCORE_DATE, {(EntityType.COMPETITOR.value, organization.id): "Suzhou Abogen"}
+        )
+
+    assert len(candidates) == 1
+    evidence = set(candidates[0].evidence_record_ids)
+    assert evidence == in_window
+    assert old not in evidence
+    # and the interpretation honestly says this is a resumption, not a first-ever move
+    assert "resuming" in candidates[0].text.interpretation.lower()
+    assert "not a continuation" not in candidates[0].text.interpretation.lower()
+
+
 def test_ongoing_activity_is_not_a_new_entry(factory: sessionmaker[Session]) -> None:
     with session_scope(factory) as session:
         topic = _topic(session)

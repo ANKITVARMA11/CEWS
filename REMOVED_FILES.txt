@@ -1,0 +1,5 @@
+These files from the previous delivery were deleted this round - remove them from your copy too:
+
+dashboards/streamlit/chat_app.py
+  -> replaced by dashboards/streamlit/pages/chat.py (Streamlit's own multipage mechanism,
+     served on the same process/port as app.py - no more separate "streamlit run ... --server.port 8502")

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cews.constants import TopicStatus
@@ -105,13 +105,53 @@ def reject_review_item(session: Session, item_id: int) -> ReviewActionResult:
     return ReviewActionResult(item.id, item.queue_type, item.subject_ref, "rejected", effect)
 
 
-def pending_review_items(session: Session, *, limit: int = 100) -> list[ReviewQueueItem]:
-    """The items currently awaiting a decision, oldest first."""
+def pending_review_items(
+    session: Session,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    queue_type: str | None = None,
+) -> list[ReviewQueueItem]:
+    """One page of the items currently awaiting a decision, oldest first.
+
+    ``limit``/``offset`` page through a queue that can be far larger than any one page - a real
+    AUTO-mode pipeline run over months of continuous ingestion can leave tens of thousands of
+    ambiguous-name items pending, and nothing here fits that in one call. Callers that need the
+    true total (not just how many this page returned) use :func:`pending_review_count` instead -
+    a bug once showed a page's own ``limit`` back as if it were the total, which looked like a
+    second, smaller queue. ``queue_type`` narrows to one kind (e.g. ``"organization_parent"``),
+    matching the same filter :func:`pending_review_count` accepts, so a filtered page and its
+    filtered total always describe the same slice of the queue.
+    """
+    query = select(ReviewQueueItem).where(ReviewQueueItem.status == "pending")
+    if queue_type:
+        query = query.where(ReviewQueueItem.queue_type == queue_type)
     return list(
         session.scalars(
-            select(ReviewQueueItem)
-            .where(ReviewQueueItem.status == "pending")
-            .order_by(ReviewQueueItem.queue_type, ReviewQueueItem.id)
+            query.order_by(ReviewQueueItem.queue_type, ReviewQueueItem.id)
+            .offset(offset)
             .limit(limit)
+        )
+    )
+
+
+def pending_review_count(session: Session, *, queue_type: str | None = None) -> int:
+    """How many items are actually waiting - unbounded, unlike :func:`pending_review_items`'s
+    page. See that function's docstring for why a page's own size must never stand in for this."""
+    query = (
+        select(func.count()).select_from(ReviewQueueItem).where(ReviewQueueItem.status == "pending")
+    )
+    if queue_type:
+        query = query.where(ReviewQueueItem.queue_type == queue_type)
+    return int(session.scalar(query) or 0)
+
+
+def review_queue_types(session: Session) -> list[str]:
+    """Every distinct kind of item currently pending, for a filter control - sorted, so the
+    choices never reorder themselves between one page load and the next."""
+    return sorted(
+        str(value)
+        for value in session.scalars(
+            select(ReviewQueueItem.queue_type).where(ReviewQueueItem.status == "pending").distinct()
         )
     )

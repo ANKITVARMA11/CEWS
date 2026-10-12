@@ -69,6 +69,53 @@ def test_a_first_move_into_a_topic_is_detected(factory: sessionmaker[Session]) -
     assert "after 18 month(s) with none" in entries[0].description
 
 
+def test_a_genuine_first_move_has_no_earlier_history(factory: sessionmaker[Session]) -> None:
+    with session_scope(factory) as session:
+        organization_id, topic_id = setup(session)
+        add_activity(session, organization_id, topic_id, WINDOW_START, 8)
+        entries = detect_new_therapeutic_area_entry(session, as_of=AS_OF)
+    assert entries[0].had_earlier_history is False
+    assert entries[0].window_start == WINDOW_START
+
+
+def test_a_resumption_after_a_long_gap_is_still_detected_but_flagged(
+    factory: sessionmaker[Session],
+) -> None:
+    """Regression: the rule's own quiet check only looks 18 months back, so it cannot alone
+    tell a genuine first move from a resumption - an organization with real, years-old history
+    in this exact topic, now active again after a long-enough gap, still satisfies the rule's
+    narrow definition of "entry". had_earlier_history is the separate check that tells the two
+    apart, so the insight text this feeds does not call a resumption "not a continuation of
+    existing work" - caught fact-checking a real insight whose own evidence included work from
+    years before the quiet window the claim was actually about."""
+    with session_scope(factory) as session:
+        organization_id, topic_id = setup(session)
+        add_activity(session, organization_id, topic_id, date(2023, 10, 1), 1)  # years-old work
+        add_activity(
+            session, organization_id, topic_id, date(2024, 8, 1), 1
+        )  # still before quiet_start
+        add_activity(session, organization_id, topic_id, WINDOW_START, 3)
+        entries = detect_new_therapeutic_area_entry(session, as_of=AS_OF)
+    assert len(entries) == 1, "a long-enough quiet gap still qualifies as an entry"
+    assert entries[0].had_earlier_history is True
+    assert entries[0].records_in_window == 3
+
+
+def test_history_right_up_to_the_quiet_window_still_blocks_the_entry(
+    factory: sessionmaker[Session],
+) -> None:
+    """The other side of the same check: activity inside the quiet window itself (not before
+    it) is what the rule's own `before` check already excludes - had_earlier_history must not
+    be confused with that, and must not fire an entry at all here."""
+    with session_scope(factory) as session:
+        organization_id, topic_id = setup(session)
+        add_activity(
+            session, organization_id, topic_id, date(2025, 1, 1), 2
+        )  # inside the quiet window
+        add_activity(session, organization_id, topic_id, WINDOW_START, 5)
+        assert detect_new_therapeutic_area_entry(session, as_of=AS_OF) == []
+
+
 def test_a_company_already_working_there_is_not_an_entry(
     factory: sessionmaker[Session],
 ) -> None:

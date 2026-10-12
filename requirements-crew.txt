@@ -1,0 +1,3 @@
+# Optional: the CrewAI multi-agent crew (cews crew brief). Also needs requirements-mcp.txt.
+crewai>=1.15,<2
+crewai-tools[mcp]>=1.15,<2

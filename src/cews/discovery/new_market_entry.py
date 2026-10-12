@@ -35,11 +35,25 @@ AREA_TOPIC_TYPE = "therapeutic_area"
 DEFAULT_WINDOW_MONTHS = 6
 DEFAULT_QUIET_MONTHS = 18
 DEFAULT_MIN_RECORDS = 3
+EPOCH = date(1900, 1, 1)  # a practical "since the beginning of any real data" lower bound
 
 
 @dataclass(frozen=True)
 class MarketEntry:
-    """A competitor's first significant activity in an area."""
+    """A competitor's first significant activity in an area - or its first *in a while*.
+
+    ``had_earlier_history`` is what tells the two apart. The rule's own quiet-period check only
+    looks ``quiet_months`` back from the recent window - it has no way to see further than that,
+    by design (see the module docstring on why a long quiet stretch is what the check needs, not
+    an exhaustive full-history scan). That means an organization that did real work in this exact
+    topic years ago, went quiet for just over ``quiet_months``, and has now resumed, satisfies
+    the rule's own definition of "entry" - but is not a first move at all. A separate, one-time
+    check further back (``_had_earlier_history``) is what distinguishes the two, so the insight
+    text this becomes (see ``cews.insights.templates.new_market_entry_text``) does not overclaim
+    "not a continuation of existing work" for an organization whose own evidence, once shown,
+    plainly includes earlier work there. Caught by someone fact-checking a real insight, whose
+    evidence included two records years older than the quiet window the claim was about.
+    """
 
     organization_id: int
     organization_name: str
@@ -48,6 +62,8 @@ class MarketEntry:
     records_in_window: int
     quiet_months: int
     first_period: date | None
+    had_earlier_history: bool
+    window_start: date  # so evidence can be scoped to the same window this count describes
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-friendly form, stored with the score that used it."""
@@ -57,6 +73,7 @@ class MarketEntry:
             "records_in_window": self.records_in_window,
             "quiet_months_before": self.quiet_months,
             "first_period": self.first_period.isoformat() if self.first_period else None,
+            "had_earlier_history": self.had_earlier_history,
         }
 
     @property
@@ -64,7 +81,7 @@ class MarketEntry:
         """One sentence stating the observed fact, with no interpretation."""
         return (
             f"{self.organization_name} recorded {self.records_in_window} record(s) in "
-            f"{self.topic_name} after {self.quiet_months} month(s) with none"
+            f"{self.topic_name} after {self.quiet_months} month(s) with none."
         )
 
 
@@ -132,6 +149,10 @@ def detect_new_therapeutic_area_entry(
     before = _totals(session, quiet_start, window_start, AREA_TOPIC_TYPE if areas_only else None)
     if not recent:
         return []
+    # Everything before the quiet window even starts - not part of the "were they quiet"
+    # check itself (that is `before`, above), only of whether this is a real first move or a
+    # resumption after a gap. See MarketEntry.had_earlier_history for why this matters.
+    earlier = _totals(session, EPOCH, quiet_start, AREA_TOPIC_TYPE if areas_only else None)
 
     names = {
         organization.id: organization.canonical_name
@@ -156,6 +177,8 @@ def detect_new_therapeutic_area_entry(
                 records_in_window=count,
                 quiet_months=quiet_months,
                 first_period=first,
+                had_earlier_history=earlier.get((organization_id, topic_id), (0, None))[0] > 0,
+                window_start=window_start,
             )
         )
     LOGGER.info("detected %d new therapeutic area entr(ies)", len(entries))

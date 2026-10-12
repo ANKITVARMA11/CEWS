@@ -217,6 +217,7 @@ def find_new_market_entries(
             area_name=entry.topic_name,
             records_in_window=entry.records_in_window,
             quiet_months=entry.quiet_months,
+            had_earlier_history=entry.had_earlier_history,
         )
         candidates.append(
             InsightCandidate(
@@ -233,6 +234,8 @@ def find_new_market_entries(
                     session,
                     EntityType.COMPETITOR.value,
                     entry.organization_id,
+                    topic_id=entry.topic_id,  # the claim is about this org AND this topic
+                    published_after=entry.window_start,  # match what records_in_window counted
                     limit=DEFAULT_EVIDENCE_LIMIT,
                 ),
             )

@@ -16,6 +16,7 @@ from cews.database.migrations import upgrade_database
 from cews.database.models import (
     Organization,
     OrganizationAlias,
+    Publication,
     RecordOrganization,
     RecordTopic,
     ReviewQueueItem,
@@ -85,7 +86,16 @@ def test_records_are_linked_to_organizations_and_topics(
     with session_scope(loaded) as session:
         summary = normalize_records(session, settings, taxonomy)
     assert summary.records_processed > 200 and summary.failures == 0
-    assert summary.organization_links >= summary.records_processed
+    # Every record type except Publication names at least one organization directly (sponsor,
+    # assignee, recipient, announcer); a publication's only organization-shaped field is its
+    # authors' affiliations, which are deliberately never resolved as organizations (see
+    # organization_mentions's docstring note on Publication - affiliation text is not
+    # sponsorship, and running it through the resolver anyway is what produced a review queue of
+    # 146,000+ items on real data). So publications are the one record type allowed to end up
+    # with zero organization links.
+    with session_scope(loaded) as session:
+        publication_count = session.scalar(select(func.count()).select_from(Publication)) or 0
+    assert summary.organization_links >= summary.records_processed - publication_count
     assert summary.topic_links > 0
     assert _count(loaded, SourceRecord, processing_status=ProcessingStatus.NORMALIZED.value) == (
         summary.records_processed
@@ -537,3 +547,90 @@ def test_names_added_by_the_resolver_are_still_saved_after_records_are_released(
     with session_scope(loaded) as session:
         mentions = session.execute(select(func.sum(OrganizationAlias.mention_count))).scalar() or 0
     assert mentions > 0
+
+
+# --------------------------------------------------------------------------------------
+# A flush failure for one record must not take the rest of the batch down with it
+#
+# Seen for real on a live refresh over 23,624 records: a flush deep inside one record's
+# normalization failed (an organization name collision - see test_organization_resolver.py for
+# that half of the fix), and the per-record error handler's own attempt to log which record had
+# failed needed a fresh query on a session SQLAlchemy had already marked unusable, raising a
+# second, more confusing error that aborted the entire run instead of just that one record.
+# --------------------------------------------------------------------------------------
+def test_a_flush_failure_for_one_record_does_not_lose_the_rest_of_the_batch(
+    loaded: sessionmaker[Session],
+    settings: Settings,
+    taxonomy: Taxonomy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import text
+
+    import cews.normalization.pipeline as pipeline_module
+
+    real_normalize_one = pipeline_module._normalize_one
+    failed_id: dict[str, int] = {}
+
+    def flaky(session: Session, record: SourceRecord, **kwargs: Any) -> None:
+        if (
+            "id" not in failed_id and record.id % 7 == 0
+        ):  # fail exactly one record, well into the run
+            failed_id["id"] = record.id
+            session.execute(text("INSERT INTO organizations (canonical_name) VALUES (NULL)"))
+            session.flush()  # a real, unrelated DB-level failure - not the resolver's own recovery path
+        return real_normalize_one(session, record, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "_normalize_one", flaky)
+    with session_scope(loaded) as session:
+        summary = normalize_records(
+            session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True
+        )
+
+    assert "id" in failed_id, "the test did not actually trigger its own injected failure"
+    assert summary.failures == 1
+    assert (
+        summary.records_processed > 200
+    )  # the rest of a 250-ish-record fixture still went through
+
+    with session_scope(loaded) as session:
+        statuses = {
+            status: count
+            for status, count in session.execute(
+                select(SourceRecord.processing_status, func.count()).group_by(
+                    SourceRecord.processing_status
+                )
+            ).all()
+        }
+    assert statuses.get(ProcessingStatus.FAILED.value, 0) == 1
+    assert statuses.get(ProcessingStatus.NORMALIZED.value, 0) == summary.records_processed
+
+
+def test_the_failing_records_own_batch_mates_are_not_rolled_back_with_it(
+    loaded: sessionmaker[Session],
+    settings: Settings,
+    taxonomy: Taxonomy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stronger version of the test above: records processed earlier in the SAME batch as
+    the failing one - genuinely at risk, since they share one uncommitted transaction with it
+    until the next batch boundary - must still be saved, not silently lost."""
+    from sqlalchemy import text
+
+    import cews.normalization.pipeline as pipeline_module
+
+    real_normalize_one = pipeline_module._normalize_one
+
+    def flaky(session: Session, record: SourceRecord, **kwargs: Any) -> None:
+        if record.id == 5:  # inside the first batch (BATCH=100), with batch-mates ahead of it
+            session.execute(text("INSERT INTO organizations (canonical_name) VALUES (NULL)"))
+            session.flush()
+        return real_normalize_one(session, record, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "_normalize_one", flaky)
+    with session_scope(loaded) as session:
+        normalize_records(session, settings, taxonomy, batch_size=BATCH, commit_each_batch=True)
+
+    with session_scope(loaded) as session:
+        earlier = session.get(SourceRecord, 2)  # processed before record 5, same batch
+        assert earlier is not None
+        assert earlier.processing_status == ProcessingStatus.NORMALIZED.value
